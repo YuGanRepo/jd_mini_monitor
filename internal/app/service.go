@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -75,6 +76,11 @@ func NewService() (*Service, error) {
 	if err := loadSKUSnapshot(filepath.Join(paths.LogDir, "intercepts", "sku-latest.json"), skuStore); err != nil {
 		logger.Printf("load sku snapshot failed: %v", err)
 	}
+
+	// If a previous run enabled the Windows system proxy and then exited
+	// uncleanly (crash / force-kill), the system proxy is left pointing at our
+	// now-dead listener, which breaks all internet access. Recover it here.
+	recoverDanglingSystemProxy(paths, logger)
 
 	return &Service{
 		paths:         paths,
@@ -212,6 +218,13 @@ func (service *Service) StartProxy(options ServeOptions) (Status, error) {
 			service.setLastError(err)
 			return service.Status(), err
 		}
+		// Never persist a "previous" state that already points at our own proxy
+		// (would happen after an earlier unclean exit). Restoring it would just
+		// re-point the system proxy at a dead port, so save a disabled state
+		// instead — restoring then cleanly turns the system proxy off.
+		if proxyPointsToLocalProxy(previousState.Server, listener.Addr().String()) {
+			previousState = winproxy.State{Override: previousState.Override}
+		}
 		if err := winproxy.SaveState(service.paths.ProxyStatePath, previousState); err != nil {
 			_ = listener.Close()
 			service.setLastError(err)
@@ -265,6 +278,10 @@ func (service *Service) StopProxy(ctx context.Context) (Status, error) {
 			if stopErr == nil {
 				stopErr = err
 			}
+		} else {
+			// Clean restore: drop the recovery marker so the next launch does
+			// not treat this run as an unclean exit.
+			_ = os.Remove(service.paths.ProxyStatePath)
 		}
 	}
 	if stopErr != nil {
@@ -412,4 +429,44 @@ func (service *Service) setLastError(err error) {
 		return
 	}
 	service.lastError = err.Error()
+}
+
+// proxyPointsToLocalProxy reports whether a Windows ProxyServer string refers to
+// this app's own loopback proxy (so it must not be persisted as a "previous"
+// state, otherwise restoring it would re-point the system proxy at a dead port).
+func proxyPointsToLocalProxy(server string, addr string) bool {
+	server = strings.TrimSpace(server)
+	if server == "" {
+		return false
+	}
+	if addr != "" && strings.Contains(server, addr) {
+		return true
+	}
+	return strings.Contains(server, "127.0.0.1:8899")
+}
+
+// recoverDanglingSystemProxy restores the saved previous system-proxy state when
+// a state file is left behind by a previous unclean exit (crash / force-kill).
+// The state file only exists between a successful StartProxy(EnableSystemProxy)
+// and a clean StopProxy; if it is present at startup, the last run did not clean
+// up. If the saved state itself points back at our proxy, the system proxy is
+// disabled instead so the user's internet is not left broken.
+func recoverDanglingSystemProxy(paths Paths, logger *log.Logger) {
+	if _, err := os.Stat(paths.ProxyStatePath); err != nil {
+		return
+	}
+	state, err := winproxy.LoadState(paths.ProxyStatePath)
+	if err != nil {
+		logger.Printf("recover system proxy: load state failed: %v", err)
+		return
+	}
+	if proxyPointsToLocalProxy(state.Server, "") {
+		state = winproxy.State{Override: state.Override}
+	}
+	if err := winproxy.Restore(state); err != nil {
+		logger.Printf("recover system proxy: restore failed: %v", err)
+		return
+	}
+	_ = os.Remove(paths.ProxyStatePath)
+	logger.Printf("recovered system proxy after previous unclean exit")
 }

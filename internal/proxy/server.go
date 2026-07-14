@@ -163,24 +163,11 @@ func (server *Server) handleConnect(responseWriter http.ResponseWriter, request 
 
 	targetHost := ensurePort(request.Host, "443")
 	if server.rules == nil || !server.rules.HasHostMatch(targetHost) {
-		server.appendLog(RequestLogEntry{
-			Time:       time.Now(),
-			Method:     http.MethodConnect,
-			URL:        targetHost,
-			ActionType: "tunnel",
-			Status:     http.StatusOK,
-		})
+		// Not a rule host: blind TCP tunnel. Not decrypted, not logged as an
+		// interception (only the configured rule URLs are intercepted).
 		server.tunnel(clientConn, targetHost)
 		return
 	}
-
-	server.appendLog(RequestLogEntry{
-		Time:       time.Now(),
-		Method:     http.MethodConnect,
-		URL:        targetHost,
-		ActionType: "mitm",
-		Status:     http.StatusOK,
-	})
 
 	server.mitm(clientConn, targetHost)
 }
@@ -304,14 +291,18 @@ func (server *Server) processRequest(request *http.Request) (*http.Response, err
 
 	response, err := server.roundTrip(request)
 	if err != nil {
-		server.appendLog(RequestLogEntry{
-			Time:       time.Now(),
-			Method:     request.Method,
-			URL:        request.URL.String(),
-			RuleName:   matchedRuleName(matchedRule),
-			ActionType: matchedActionType(matchedRule),
-			Status:     http.StatusBadGateway,
-		})
+		// Only record failures for requests that matched a rule (the configured
+		// URLs). Unmatched requests are plain passthrough and not logged.
+		if matchedRule != nil {
+			server.appendLog(RequestLogEntry{
+				Time:       time.Now(),
+				Method:     request.Method,
+				URL:        request.URL.String(),
+				RuleName:   matchedRule.Name,
+				ActionType: matchedRule.Action.Type,
+				Status:     http.StatusBadGateway,
+			})
+		}
 		return nil, err
 	}
 
@@ -344,31 +335,9 @@ func (server *Server) processRequest(request *http.Request) (*http.Response, err
 			ActionType: matchedRule.Action.Type,
 			Status:     response.StatusCode,
 		})
-	} else {
-		server.appendLog(RequestLogEntry{
-			Time:       time.Now(),
-			Method:     request.Method,
-			URL:        request.URL.String(),
-			ActionType: "passthrough",
-			Status:     response.StatusCode,
-		})
 	}
 
 	return response, nil
-}
-
-func matchedRuleName(rule *rules.Rule) string {
-	if rule == nil {
-		return ""
-	}
-	return rule.Name
-}
-
-func matchedActionType(rule *rules.Rule) string {
-	if rule == nil {
-		return "error"
-	}
-	return rule.Action.Type
 }
 
 func drainRequestBody(request *http.Request) {

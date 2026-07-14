@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
+
+	"mini-proxy/internal/syscmd"
 )
 
 type Config struct {
@@ -131,7 +132,7 @@ func runPowerShell(ctx context.Context, script string, configPath string) (strin
 	}
 	defer os.Remove(scriptPath)
 
-	command := exec.CommandContext(ctx, "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath, configPath)
+	command := syscmd.CommandContext(ctx, "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath, configPath)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return string(output), fmt.Errorf("PowerShell UI automation failed: %w: %s", err, strings.TrimSpace(string(output)))

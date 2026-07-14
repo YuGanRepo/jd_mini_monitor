@@ -4,10 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
+
+	"mini-proxy/internal/syscmd"
 )
 
 const internetSettingsKey = `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`
@@ -22,7 +23,7 @@ func Read() (State, error) {
 	if runtime.GOOS != "windows" {
 		return State{}, fmt.Errorf("system proxy control is only supported on Windows")
 	}
-	output, err := exec.Command("reg", "query", internetSettingsKey).CombinedOutput()
+	output, err := syscmd.Command("reg", "query", internetSettingsKey).CombinedOutput()
 	if err != nil {
 		return State{}, fmt.Errorf("query proxy registry failed: %w: %s", err, strings.TrimSpace(string(output)))
 	}
@@ -93,7 +94,7 @@ func LoadState(path string) (State, error) {
 }
 
 func regAddDWORD(name string, value int) error {
-	output, err := exec.Command("reg", "add", internetSettingsKey, "/v", name, "/t", "REG_DWORD", "/d", strconv.Itoa(value), "/f").CombinedOutput()
+	output, err := syscmd.Command("reg", "add", internetSettingsKey, "/v", name, "/t", "REG_DWORD", "/d", strconv.Itoa(value), "/f").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("set %s failed: %w: %s", name, err, strings.TrimSpace(string(output)))
 	}
@@ -102,13 +103,13 @@ func regAddDWORD(name string, value int) error {
 
 func regAddString(name string, value string) error {
 	if value == "" {
-		output, err := exec.Command("reg", "delete", internetSettingsKey, "/v", name, "/f").CombinedOutput()
+		output, err := syscmd.Command("reg", "delete", internetSettingsKey, "/v", name, "/f").CombinedOutput()
 		if err != nil && !strings.Contains(strings.ToLower(string(output)), "unable to find") {
 			return fmt.Errorf("delete %s failed: %w: %s", name, err, strings.TrimSpace(string(output)))
 		}
 		return nil
 	}
-	output, err := exec.Command("reg", "add", internetSettingsKey, "/v", name, "/t", "REG_SZ", "/d", value, "/f").CombinedOutput()
+	output, err := syscmd.Command("reg", "add", internetSettingsKey, "/v", name, "/t", "REG_SZ", "/d", value, "/f").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("set %s failed: %w: %s", name, err, strings.TrimSpace(string(output)))
 	}
@@ -124,7 +125,7 @@ public static extern bool InternetSetOption(System.IntPtr hInternet, int dwOptio
 [WinInet.Native]::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0) | Out-Null
 [WinInet.Native]::InternetSetOption([IntPtr]::Zero, 37, [IntPtr]::Zero, 0) | Out-Null
 `
-	output, err := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script).CombinedOutput()
+	output, err := syscmd.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("notify proxy settings failed: %w: %s", err, strings.TrimSpace(string(output)))
 	}

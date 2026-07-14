@@ -65,7 +65,7 @@ func TestProcessRequestLogsPassthroughMatch(t *testing.T) {
 	}
 }
 
-func TestProcessRequestLogsWhenNoRuleMatches(t *testing.T) {
+func TestProcessRequestDoesNotLogUnmatched(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
 	}))
@@ -86,15 +86,8 @@ func TestProcessRequestLogsWhenNoRuleMatches(t *testing.T) {
 	}
 	defer response.Body.Close()
 
-	logs := server.RecentLogs()
-	if len(logs) != 1 {
-		t.Fatalf("logs count = %d, want 1", len(logs))
-	}
-	if logs[0].ActionType != "passthrough" {
-		t.Fatalf("action type = %q, want passthrough", logs[0].ActionType)
-	}
-	if logs[0].Status != http.StatusNoContent {
-		t.Fatalf("status = %d, want 204", logs[0].Status)
+	// Unmatched requests are plain passthrough: not recorded in the request log.
+	if logs := server.RecentLogs(); len(logs) != 0 {
+		t.Fatalf("logs count = %d, want 0", len(logs))
 	}
 }
-

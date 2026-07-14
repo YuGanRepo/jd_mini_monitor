@@ -13,12 +13,13 @@ import (
 	"math/big"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	"mini-proxy/internal/syscmd"
 )
 
 const (
@@ -120,7 +121,7 @@ func (manager *Manager) InstallTrustedRoot() error {
 	if runtime.GOOS != "windows" {
 		return fmt.Errorf("certificate install is only supported on Windows")
 	}
-	command := exec.Command("certutil", "-user", "-addstore", "Root", manager.certPath)
+	command := syscmd.Command("certutil", "-user", "-addstore", "Root", manager.certPath)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("certutil addstore failed: %w: %s", err, strings.TrimSpace(string(output)))
@@ -132,7 +133,7 @@ func (manager *Manager) UninstallTrustedRoot() error {
 	if runtime.GOOS != "windows" {
 		return fmt.Errorf("certificate uninstall is only supported on Windows")
 	}
-	command := exec.Command("certutil", "-user", "-delstore", "Root", manager.Thumbprint())
+	command := syscmd.Command("certutil", "-user", "-delstore", "Root", manager.Thumbprint())
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("certutil delstore failed: %w: %s", err, strings.TrimSpace(string(output)))
@@ -144,7 +145,7 @@ func (manager *Manager) IsTrustedRootInstalled() bool {
 	if runtime.GOOS != "windows" {
 		return false
 	}
-	command := exec.Command("certutil", "-user", "-store", "Root", manager.Thumbprint())
+	command := syscmd.Command("certutil", "-user", "-store", "Root", manager.Thumbprint())
 	output, err := command.CombinedOutput()
 	return err == nil && strings.Contains(strings.ToUpper(string(output)), manager.Thumbprint())
 }
