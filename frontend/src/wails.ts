@@ -53,6 +53,15 @@ export type JDAutomationStatus = {
   lastError: string;
 };
 
+export type RequestLogEntry = {
+  time: string;
+  method: string;
+  url: string;
+  ruleName?: string;
+  actionType?: string;
+  status?: number;
+};
+
 type DesktopApi = {
   GetDefaults(): Promise<DesktopDefaults>;
   GetStatus(): Promise<Status>;
@@ -70,6 +79,7 @@ type DesktopApi = {
   StartJDAutomation(options: JDAutomationOptions): Promise<JDAutomationStatus>;
   StopJDAutomation(): Promise<JDAutomationStatus>;
   GetJDAutomationStatus(): Promise<JDAutomationStatus>;
+  GetRequestLogs(): Promise<RequestLogEntry[]>;
 };
 
 declare global {

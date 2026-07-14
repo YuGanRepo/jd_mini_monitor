@@ -10,6 +10,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	coreapp "mini-proxy/internal/app"
+	"mini-proxy/internal/proxy"
 	"mini-proxy/internal/rules"
 	"mini-proxy/internal/uiauto"
 )
@@ -61,7 +62,7 @@ func (app *DesktopApp) Shutdown(ctx context.Context) {
 
 func (app *DesktopApp) GetDefaults() DesktopDefaults {
 	return DesktopDefaults{
-		RulesPath:      filepath.Clean("configs/example.rules.json"),
+		RulesPath:      filepath.Clean("configs/jd.rules.json"),
 		AutomationPath: filepath.Clean("configs/example.automation.json"),
 		ProxyAddr:      "127.0.0.1:8899",
 		ProxyOverride:  "localhost;127.0.0.1;<local>",
@@ -159,4 +160,8 @@ func (app *DesktopApp) StopJDAutomation() coreapp.JDAutomationStatus {
 
 func (app *DesktopApp) GetJDAutomationStatus() coreapp.JDAutomationStatus {
 	return app.service.GetJDAutomationStatus()
+}
+
+func (app *DesktopApp) GetRequestLogs() []proxy.RequestLogEntry {
+	return app.service.GetRequestLogs()
 }

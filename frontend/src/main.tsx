@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { api, DesktopDefaults, JDAutomationOptions, JDAutomationStatus, RulesValidationResult, Status } from './wails';
+import { api, DesktopDefaults, JDAutomationOptions, JDAutomationStatus, RequestLogEntry, Status } from './wails';
 import './styles.css';
 
 const emptyStatus: Status = {
   proxyRunning: false,
   addr: '127.0.0.1:8899',
-  rulesPath: 'configs/example.rules.json',
+  rulesPath: 'configs/jd.rules.json',
   systemProxyActive: false,
   rootCertPath: '',
   rootThumbprint: '',
@@ -41,27 +41,35 @@ const emptyJDStatus: JDAutomationStatus = {
 function App() {
   const [status, setStatus] = useState<Status>(emptyStatus);
   const [defaults, setDefaults] = useState<DesktopDefaults>({
-    rulesPath: 'configs/example.rules.json',
+    rulesPath: 'configs/jd.rules.json',
     automationPath: 'configs/example.automation.json',
     proxyAddr: '127.0.0.1:8899',
     proxyOverride: 'localhost;127.0.0.1;<local>',
   });
   const [addr, setAddr] = useState('127.0.0.1:8899');
-  const [rulesPath, setRulesPath] = useState('configs/example.rules.json');
-  const [automationPath, setAutomationPath] = useState('configs/example.automation.json');
+  const [rulesPath, setRulesPath] = useState('configs/jd.rules.json');
   const [proxyOverride, setProxyOverride] = useState('localhost;127.0.0.1;<local>');
-  const [enableSystemProxy, setEnableSystemProxy] = useState(true);
-  const [rulesText, setRulesText] = useState('');
-  const [validation, setValidation] = useState<RulesValidationResult>({ valid: false, count: 0, error: 'Not validated yet' });
-  const [automationOutput, setAutomationOutput] = useState('');
   const [jdOptions, setJdOptions] = useState<JDAutomationOptions>(defaultJDOptions);
   const [jdStatus, setJdStatus] = useState<JDAutomationStatus>(emptyJDStatus);
+  const [requestLogs, setRequestLogs] = useState<RequestLogEntry[]>([]);
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     void initialize();
   }, []);
+
+  useEffect(() => {
+    if (!status.proxyRunning) return;
+    const timer = window.setInterval(async () => {
+      try {
+        setRequestLogs(await api().GetRequestLogs());
+      } catch {
+        // ignore transient polling errors
+      }
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [status.proxyRunning]);
 
   useEffect(() => {
     if (!jdStatus.running) return;
@@ -81,12 +89,10 @@ function App() {
       setDefaults(loadedDefaults);
       setAddr(loadedDefaults.proxyAddr);
       setRulesPath(loadedDefaults.rulesPath);
-      setAutomationPath(loadedDefaults.automationPath);
       setProxyOverride(loadedDefaults.proxyOverride);
       const nextStatus = await api().GetStatus();
       setStatus(nextStatus);
-      await loadRules(loadedDefaults.rulesPath);
-    }, 'Ready');
+    }, '已就绪');
   }
 
   async function runTask(task: () => Promise<void>, successMessage?: string) {
@@ -102,91 +108,33 @@ function App() {
     }
   }
 
-  async function refreshStatus() {
-    const nextStatus = await api().GetStatus();
-    setStatus(nextStatus);
-  }
-
-  async function loadRules(path = rulesPath) {
-    const content = await api().ReadTextFile(path);
-    setRulesText(content);
-    setRulesPath(path);
-    setValidation(await api().ValidateRulesText(content));
-  }
-
-  async function chooseRulesFile() {
-    await runTask(async () => {
-      const selected = await api().SelectJSONFile('Select rules JSON');
-      if (selected) await loadRules(selected);
-    });
-  }
-
-  async function saveRules() {
-    await runTask(async () => {
-      const result = await api().ValidateRulesText(rulesText);
-      setValidation(result);
-      if (!result.valid) throw new Error(result.error);
-      await api().WriteTextFile(rulesPath, rulesText);
-      await refreshStatus();
-    }, 'Rules saved');
-  }
-
-  async function formatRules() {
-    await runTask(async () => {
-      const formatted = await api().FormatJSON(rulesText);
-      setRulesText(formatted);
-      setValidation(await api().ValidateRulesText(formatted));
-    }, 'Rules formatted');
-  }
-
   async function startProxy() {
     await runTask(async () => {
-      const result = await api().ValidateRulesText(rulesText);
-      setValidation(result);
-      if (!result.valid) throw new Error(result.error);
-      await api().WriteTextFile(rulesPath, rulesText);
-      setStatus(await api().StartProxy({ addr, rulesPath, enableSystemProxy, proxyOverride }));
-    }, 'Proxy started');
+      setRequestLogs([]);
+      setStatus(await api().StartProxy({ addr, rulesPath, enableSystemProxy: true, proxyOverride }));
+    }, '代理已启动，已自动设置系统代理并检查证书');
   }
 
   async function stopProxy() {
     await runTask(async () => {
       setStatus(await api().StopProxy());
-    }, 'Proxy stopped');
+    }, '代理已停止');
+  }
+
+  async function refreshRequestLogs() {
+    setRequestLogs(await api().GetRequestLogs());
   }
 
   async function installCert() {
     await runTask(async () => {
       setStatus(await api().InstallCert());
-    }, 'Certificate installed');
+    }, '证书已安装');
   }
 
   async function uninstallCert() {
     await runTask(async () => {
       setStatus(await api().UninstallCert());
-    }, 'Certificate uninstalled');
-  }
-
-  async function chooseAutomationFile() {
-    await runTask(async () => {
-      const selected = await api().SelectJSONFile('Select automation JSON');
-      if (selected) setAutomationPath(selected);
-    });
-  }
-
-  async function inspectAutomation() {
-    await runTask(async () => {
-      const output = await api().InspectAutomation(automationPath);
-      setAutomationOutput(output.trim() || 'No buttons matched the current window selector.');
-      await refreshStatus();
-    }, 'Inspection finished');
-  }
-
-  async function runAutomation() {
-    await runTask(async () => {
-      setStatus(await api().RunAutomation(automationPath));
-      setAutomationOutput('Automation sequence completed. Check logs for per-step click details.');
-    }, 'Automation finished');
+    }, '证书已卸载');
   }
 
   async function toggleJDAutomation(enabled: boolean) {
@@ -196,97 +144,43 @@ function App() {
       } else {
         setJdStatus(await api().StopJDAutomation());
       }
-    }, enabled ? 'JD automation started' : 'JD automation stopped');
+    }, enabled ? '京东自动化已启动' : '京东自动化已停止');
   }
 
   return (
     <main className="shell">
       <section className="topbar">
         <div>
-          <p className="eyebrow">Mini Proxy Desktop</p>
-          <h1>HTTPS Interception And Window Automation</h1>
+          <p className="eyebrow">Mini Proxy 桌面端</p>
+          <h1>HTTPS 抓包拦截与窗口自动化</h1>
         </div>
         <div className={`status-pill ${status.proxyRunning ? 'running' : ''}`}>
           <span />
-          {status.proxyRunning ? 'Proxy running' : 'Proxy stopped'}
+          {status.proxyRunning ? '代理运行中' : '代理已停止'}
         </div>
       </section>
 
       <section className="dashboard-grid">
-        <Panel title="Proxy Control" accent="mint">
-          <div className="field-row two">
-            <label>
-              Listen address
-              <input value={addr} onChange={(event) => setAddr(event.target.value)} disabled={status.proxyRunning || busy} />
-            </label>
-            <label>
-              Rules file
-              <div className="input-button">
-                <input value={rulesPath} onChange={(event) => setRulesPath(event.target.value)} disabled={status.proxyRunning || busy} />
-                <button type="button" onClick={chooseRulesFile} disabled={status.proxyRunning || busy}>Browse</button>
-              </div>
-            </label>
-          </div>
-          <label>
-            Proxy bypass list
-            <input value={proxyOverride} onChange={(event) => setProxyOverride(event.target.value)} disabled={status.proxyRunning || busy} />
-          </label>
-          <label className="toggle-line">
-            <input type="checkbox" checked={enableSystemProxy} onChange={(event) => setEnableSystemProxy(event.target.checked)} disabled={status.proxyRunning || busy} />
-            Set Windows system proxy while running
-          </label>
-          <div className="button-row">
-            <button type="button" className="primary" onClick={startProxy} disabled={status.proxyRunning || busy}>Start</button>
-            <button type="button" onClick={stopProxy} disabled={!status.proxyRunning || busy}>Stop</button>
-            <button type="button" onClick={() => void runTask(refreshStatus, 'Status refreshed')} disabled={busy}>Refresh</button>
-          </div>
-        </Panel>
-
-        <Panel title="Certificate" accent="gold">
+        <Panel title="代理控制" accent="mint">
           <div className="metric-list">
-            <Metric label="Trust" value={status.rootTrusted ? 'Trusted' : 'Not trusted'} tone={status.rootTrusted ? 'good' : 'warn'} />
-            <Metric label="Thumbprint" value={status.rootThumbprint || 'Pending'} />
-            <Metric label="Certificate" value={status.rootCertPath || 'Pending'} compact />
+            <Metric label="代理状态" value={status.proxyRunning ? '运行中' : '已停止'} tone={status.proxyRunning ? 'good' : undefined} />
+            <Metric label="系统代理" value={status.systemProxyActive ? '已启用' : '未启用'} tone={status.systemProxyActive ? 'good' : undefined} />
+            <Metric label="证书信任" value={status.rootTrusted ? '已安装' : '未安装'} tone={status.rootTrusted ? 'good' : 'warn'} />
           </div>
           <div className="button-row">
-            <button type="button" onClick={installCert} disabled={busy}>Install</button>
-            <button type="button" onClick={uninstallCert} disabled={busy}>Uninstall</button>
+            {status.proxyRunning ? (
+              <button type="button" className="primary" onClick={stopProxy} disabled={busy}>停止代理</button>
+            ) : (
+              <button type="button" className="primary" onClick={startProxy} disabled={busy}>启动代理</button>
+            )}
           </div>
+          <p className="hint">启动时自动设置 Windows 系统代理，并检查/安装本地根证书。规则仅使用文件配置：{rulesPath}</p>
         </Panel>
 
-        <Panel title="Rules Editor" accent="ink" wide>
-          <div className="editor-toolbar">
-            <span className={validation.valid ? 'validation good' : 'validation warn'}>
-              {validation.valid ? `${validation.count} valid rule${validation.count === 1 ? '' : 's'}` : validation.error}
-            </span>
-            <div className="button-row compact">
-              <button type="button" onClick={() => void runTask(() => loadRules(), 'Rules loaded')} disabled={busy}>Reload</button>
-              <button type="button" onClick={formatRules} disabled={busy}>Format</button>
-              <button type="button" onClick={saveRules} disabled={busy}>Save</button>
-            </div>
-          </div>
-          <textarea className="rules-editor" value={rulesText} onChange={(event) => setRulesText(event.target.value)} spellCheck={false} />
-        </Panel>
-
-        <Panel title="Button Automation" accent="coral">
-          <label>
-            Automation file
-            <div className="input-button">
-              <input value={automationPath} onChange={(event) => setAutomationPath(event.target.value)} disabled={busy} />
-              <button type="button" onClick={chooseAutomationFile} disabled={busy}>Browse</button>
-            </div>
-          </label>
-          <div className="button-row">
-            <button type="button" onClick={inspectAutomation} disabled={busy}>Inspect</button>
-            <button type="button" className="primary warm" onClick={runAutomation} disabled={busy}>Run Sequence</button>
-          </div>
-          <pre className="automation-output">{automationOutput || 'Inspection results and click logs appear here.'}</pre>
-        </Panel>
-
-        <Panel title="JD Mini Program Automation" accent="coral">
+        <Panel title="京东小程序自动化" accent="coral">
           <div className="field-row two">
             <label>
-              Window title contains
+              窗口标题包含
               <input
                 value={jdOptions.windowTitleContains}
                 onChange={(event) => setJdOptions({ ...jdOptions, windowTitleContains: event.target.value })}
@@ -294,7 +188,7 @@ function App() {
               />
             </label>
             <label>
-              Host process
+              宿主进程名
               <input
                 value={jdOptions.processName}
                 onChange={(event) => setJdOptions({ ...jdOptions, processName: event.target.value })}
@@ -304,7 +198,7 @@ function App() {
           </div>
           <div className="field-row two">
             <label>
-              循环次数 (repeat count)
+              循环次数
               <input
                 type="number"
                 min={1}
@@ -334,15 +228,10 @@ function App() {
               disabled={jdStatus.running || busy}
             />
           </label>
-          <label className="toggle-line">
-            <input
-              type="checkbox"
-              checked={jdStatus.running}
-              onChange={(event) => void toggleJDAutomation(event.target.checked)}
-              disabled={busy}
-            />
-            开启自动化循环运行
-          </label>
+          <div className="button-row">
+            <button type="button" className="primary" onClick={() => void toggleJDAutomation(true)} disabled={jdStatus.running || busy}>开始</button>
+            <button type="button" onClick={() => void toggleJDAutomation(false)} disabled={!jdStatus.running || busy}>关闭</button>
+          </div>
           <div className="metric-list">
             <Metric
               label="状态"
@@ -356,12 +245,47 @@ function App() {
           </p>
         </Panel>
 
-        <Panel title="Runtime Paths" accent="slate">
+        <Panel title="代理请求日志" accent="ink" full>
+          <div className="editor-toolbar">
+            <span className="validation">
+              {status.proxyRunning ? `已拦截 ${requestLogs.length} 条请求（自动刷新）` : '代理未运行，显示的是最近一次运行的拦截记录'}
+            </span>
+            <div className="button-row compact">
+              <button type="button" onClick={() => void refreshRequestLogs()} disabled={busy}>刷新</button>
+              <button type="button" onClick={() => setRequestLogs([])} disabled={busy}>清空显示</button>
+            </div>
+          </div>
+          <div className="log-list">
+            {requestLogs.length === 0 && <div className="log-empty">暂无拦截记录，命中规则的请求会显示在这里。</div>}
+            {[...requestLogs].reverse().map((entry, index) => (
+              <div className="log-card" key={`${entry.time}-${index}`}>
+                <div className="log-card-top">
+                  <span className="log-tag log-tag-method">{entry.method}</span>
+                  <span className="log-tag log-tag-action">{entry.actionType || 'mock'}</span>
+                  <span className="log-tag log-tag-status">{entry.status ?? '-'}</span>
+                  <span className="log-time">{new Date(entry.time).toLocaleTimeString()}</span>
+                </div>
+                <div className="log-card-bottom">
+                  <span className="log-rule">{entry.ruleName || '未命名规则'}</span>
+                  <span className="log-url" title={entry.url}>{entry.url}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+
+        <Panel title="证书与运行时" accent="gold" full>
           <div className="metric-list">
-            <Metric label="App data" value={status.baseDir || 'Pending'} compact />
-            <Metric label="Logs" value={status.logDir || 'Pending'} compact />
-            <Metric label="Saved proxy state" value={status.proxyStatePath || 'Pending'} compact />
-            <Metric label="Defaults" value={`${defaults.proxyAddr} · ${defaults.rulesPath}`} compact />
+            <Metric label="证书信任" value={status.rootTrusted ? '已信任' : '未信任'} tone={status.rootTrusted ? 'good' : 'warn'} />
+            <Metric label="证书指纹" value={status.rootThumbprint || '待生成'} compact />
+            <Metric label="证书路径" value={status.rootCertPath || '待生成'} compact />
+            <Metric label="应用数据目录" value={status.baseDir || '待生成'} compact />
+            <Metric label="日志目录" value={status.logDir || '待生成'} compact />
+            <Metric label="默认值" value={`${defaults.proxyAddr} · ${defaults.rulesPath}`} compact />
+          </div>
+          <div className="button-row">
+            <button type="button" onClick={installCert} disabled={busy}>重新安装证书</button>
+            <button type="button" onClick={uninstallCert} disabled={busy}>卸载证书</button>
           </div>
           {(notice || status.lastError) && <div className="notice">{notice || status.lastError}</div>}
         </Panel>
@@ -370,9 +294,9 @@ function App() {
   );
 }
 
-function Panel({ title, accent, wide, children }: { title: string; accent: string; wide?: boolean; children: React.ReactNode }) {
+function Panel({ title, accent, wide, full, children }: { title: string; accent: string; wide?: boolean; full?: boolean; children: React.ReactNode }) {
   return (
-    <section className={`panel ${wide ? 'wide' : ''}`} data-accent={accent}>
+    <section className={`panel ${wide ? 'wide' : ''} ${full ? 'full' : ''}`} data-accent={accent}>
       <div className="panel-heading">
         <span />
         <h2>{title}</h2>

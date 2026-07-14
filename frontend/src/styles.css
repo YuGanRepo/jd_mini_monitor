@@ -22,6 +22,7 @@ body {
 
 button,
 input,
+select,
 textarea {
   font: inherit;
 }
@@ -60,6 +61,7 @@ button.primary.warm {
 }
 
 input,
+select,
 textarea {
   border: 1px solid rgba(24, 32, 31, 0.16);
   border-radius: 7px;
@@ -69,6 +71,7 @@ textarea {
 }
 
 input:focus,
+select:focus,
 textarea:focus {
   border-color: rgba(31, 111, 99, 0.68);
   box-shadow: 0 0 0 3px rgba(31, 111, 99, 0.12);
@@ -82,7 +85,8 @@ label {
   font-weight: 700;
 }
 
-label input {
+label input,
+label select {
   width: 100%;
   height: 38px;
   padding: 0 11px;
@@ -167,6 +171,10 @@ h2 {
 
 .panel.wide {
   grid-row: span 2;
+}
+
+.panel.full {
+  grid-column: 1 / -1;
 }
 
 .panel-heading {
@@ -291,24 +299,6 @@ h2 {
   font-weight: 800;
 }
 
-.validation.good {
-  color: #1f6f63;
-}
-
-.validation.warn {
-  color: #b8543d;
-}
-
-.rules-editor {
-  width: 100%;
-  min-height: 458px;
-  resize: vertical;
-  padding: 14px;
-  font-family: "Cascadia Code", "Consolas", monospace;
-  font-size: 13px;
-  line-height: 1.52;
-}
-
 .automation-output {
   min-height: 128px;
   max-height: 210px;
@@ -340,6 +330,90 @@ h2 {
   font-size: 12px;
   line-height: 1.5;
   color: rgba(24, 32, 31, 0.62);
+}
+
+.log-list {
+  display: grid;
+  gap: 8px;
+  max-height: 340px;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.log-card {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid rgba(24, 32, 31, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.65);
+}
+
+.log-card-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.log-tag {
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.log-tag-method {
+  background: rgba(31, 111, 99, 0.14);
+  color: #1f6f63;
+}
+
+.log-tag-action {
+  background: rgba(214, 154, 58, 0.18);
+  color: #8a5a17;
+  text-transform: uppercase;
+}
+
+.log-tag-status {
+  background: rgba(24, 32, 31, 0.08);
+  color: #18201f;
+  font-variant-numeric: tabular-nums;
+}
+
+.log-time {
+  margin-left: auto;
+  font-size: 11px;
+  color: rgba(24, 32, 31, 0.5);
+  font-variant-numeric: tabular-nums;
+}
+
+.log-card-bottom {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.log-rule {
+  flex: none;
+  font-weight: 700;
+  color: rgba(24, 32, 31, 0.78);
+}
+
+.log-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(24, 32, 31, 0.55);
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 11px;
+}
+
+.log-empty {
+  padding: 14px;
+  text-align: center;
+  font-size: 12px;
+  color: rgba(24, 32, 31, 0.55);
 }
 
 @media (max-width: 980px) {

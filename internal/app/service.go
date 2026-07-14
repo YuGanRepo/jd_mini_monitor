@@ -75,7 +75,7 @@ func NewService() (*Service, error) {
 		cleanupLogger: cleanup,
 		certManager:   certManager,
 		addr:          "127.0.0.1:8899",
-		rulesPath:     "configs/example.rules.json",
+		rulesPath:     "configs/jd.rules.json",
 	}, nil
 }
 
@@ -98,6 +98,19 @@ func (service *Service) Status() Status {
 	}
 }
 
+// GetRequestLogs returns the most recent proxied requests handled by the
+// currently running proxy server, oldest first. It returns an empty slice
+// when the proxy is not running.
+func (service *Service) GetRequestLogs() []proxy.RequestLogEntry {
+	service.mu.Lock()
+	server := service.proxyServer
+	service.mu.Unlock()
+	if server == nil {
+		return []proxy.RequestLogEntry{}
+	}
+	return server.RecentLogs()
+}
+
 func (service *Service) StartProxy(options ServeOptions) (Status, error) {
 	service.mu.Lock()
 	if service.proxyServer != nil {
@@ -108,7 +121,7 @@ func (service *Service) StartProxy(options ServeOptions) (Status, error) {
 		options.Addr = "127.0.0.1:8899"
 	}
 	if options.RulesPath == "" {
-		options.RulesPath = "configs/example.rules.json"
+		options.RulesPath = "configs/jd.rules.json"
 	}
 	if options.ProxyOverride == "" {
 		options.ProxyOverride = "localhost;127.0.0.1;<local>"
@@ -119,6 +132,13 @@ func (service *Service) StartProxy(options ServeOptions) (Status, error) {
 	if err != nil {
 		service.setLastError(err)
 		return service.Status(), err
+	}
+
+	if !service.certManager.IsTrustedRootInstalled() {
+		if err := service.certManager.InstallTrustedRoot(); err != nil {
+			service.setLastError(err)
+			return service.Status(), err
+		}
 	}
 
 	proxyServer := proxy.New(proxy.Config{

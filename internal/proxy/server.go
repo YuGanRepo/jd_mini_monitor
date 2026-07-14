@@ -13,11 +13,28 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"mini-proxy/internal/cert"
 	"mini-proxy/internal/rules"
 )
+
+// maxRequestLogEntries bounds the in-memory request log ring buffer kept for
+// display in the desktop UI.
+const maxRequestLogEntries = 200
+
+// RequestLogEntry describes one request that matched an interception rule
+// (mock/static/modify). Passthrough requests that did not match any rule are
+// not recorded.
+type RequestLogEntry struct {
+	Time       time.Time `json:"time"`
+	Method     string    `json:"method"`
+	URL        string    `json:"url"`
+	RuleName   string    `json:"ruleName,omitempty"`
+	ActionType string    `json:"actionType,omitempty"`
+	Status     int       `json:"status,omitempty"`
+}
 
 type Config struct {
 	Addr   string
@@ -33,6 +50,9 @@ type Server struct {
 	logger     *log.Logger
 	httpServer *http.Server
 	transport  *http.Transport
+
+	logMu       sync.Mutex
+	requestLogs []RequestLogEntry
 }
 
 func New(config Config) *Server {
@@ -230,7 +250,16 @@ func (server *Server) processRequest(request *http.Request) (*http.Response, err
 			}
 			if rule.Action.Type == "mock" || rule.Action.Type == "static" {
 				server.logger.Printf("mocking %s %s with rule %q", request.Method, request.URL.String(), rule.Name)
-				return mockResponse(request, *rule), nil
+				response := mockResponse(request, *rule)
+				server.appendLog(RequestLogEntry{
+					Time:       time.Now(),
+					Method:     request.Method,
+					URL:        request.URL.String(),
+					RuleName:   rule.Name,
+					ActionType: rule.Action.Type,
+					Status:     response.StatusCode,
+				})
+				return response, nil
 			}
 		}
 	}
@@ -246,10 +275,39 @@ func (server *Server) processRequest(request *http.Request) (*http.Response, err
 
 	if matchedRule != nil && matchedRule.Action.Type == "modify" {
 		server.logger.Printf("modifying %s %s with rule %q", request.Method, request.URL.String(), matchedRule.Name)
-		return modifyResponse(response, *matchedRule)
+		modified, modifyErr := modifyResponse(response, *matchedRule)
+		if modifyErr == nil {
+			server.appendLog(RequestLogEntry{
+				Time:       time.Now(),
+				Method:     request.Method,
+				URL:        request.URL.String(),
+				RuleName:   matchedRule.Name,
+				ActionType: matchedRule.Action.Type,
+				Status:     modified.StatusCode,
+			})
+		}
+		return modified, modifyErr
 	}
 
 	return response, nil
+}
+
+func (server *Server) appendLog(entry RequestLogEntry) {
+	server.logMu.Lock()
+	defer server.logMu.Unlock()
+	server.requestLogs = append(server.requestLogs, entry)
+	if len(server.requestLogs) > maxRequestLogEntries {
+		server.requestLogs = server.requestLogs[len(server.requestLogs)-maxRequestLogEntries:]
+	}
+}
+
+// RecentLogs returns a snapshot copy of the most recent proxied requests, oldest first.
+func (server *Server) RecentLogs() []RequestLogEntry {
+	server.logMu.Lock()
+	defer server.logMu.Unlock()
+	out := make([]RequestLogEntry, len(server.requestLogs))
+	copy(out, server.requestLogs)
+	return out
 }
 
 func (server *Server) roundTrip(request *http.Request) (*http.Response, error) {

@@ -24,7 +24,7 @@ go build -o dist/mini-proxy.exe ./cmd/mini-proxy
 
 ## 2. Open Mini Proxy Desktop
 
-Run the generated desktop exe and use the main window to manage proxy state, certificate trust, rules, and button automation.
+Run the generated desktop exe and use the main window to manage proxy state, certificate trust, request logs, and JD automation.
 
 ## 3. Install the local root certificate
 
@@ -35,9 +35,9 @@ Use the Certificate panel in the desktop app. The equivalent CLI commands are:
 .\dist\mini-proxy.exe install-cert
 ```
 
-## 4. Add an interception rule
+## 4. Configure interception rule file
 
-Use the Rules Editor panel or edit `configs/example.rules.json` and set the target `host`, `method`, `path`, and response `body`.
+Rules are file-based only. Edit `configs/jd.rules.json` and set the target `host`, `method`, `path`, and response `body`.
 
 Example action:
 
@@ -55,7 +55,7 @@ Example action:
 Use the Proxy Control panel and enable Windows system proxy if the target app honors system proxy settings. The equivalent CLI command is:
 
 ```powershell
-.\dist\mini-proxy.exe serve -rules configs/example.rules.json -system-proxy
+.\dist\mini-proxy.exe serve -rules configs/jd.rules.json -system-proxy
 ```
 
 The command sets Windows system proxy while it runs and restores the previous proxy settings when it exits normally.

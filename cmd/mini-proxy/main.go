@@ -48,7 +48,7 @@ func main() {
 func serve(args []string) error {
 	flags := flag.NewFlagSet("serve", flag.ExitOnError)
 	addr := flags.String("addr", "127.0.0.1:8899", "proxy listen address")
-	rulesPath := flags.String("rules", "configs/example.rules.json", "rules JSON path")
+	rulesPath := flags.String("rules", "configs/jd.rules.json", "rules JSON path")
 	systemProxy := flags.Bool("system-proxy", false, "enable Windows system proxy while running")
 	proxyOverride := flags.String("proxy-override", "localhost;127.0.0.1;<local>", "Windows proxy bypass list")
 	if err := flags.Parse(args); err != nil {
@@ -93,7 +93,7 @@ func uiautoInspect(args []string) error {
 func usage() {
 	fmt.Fprintln(os.Stderr, `mini-proxy commands:
   version
-  serve [-addr 127.0.0.1:8899] [-rules configs/example.rules.json] [-system-proxy]
+	serve [-addr 127.0.0.1:8899] [-rules configs/jd.rules.json] [-system-proxy]
   install-cert
   uninstall-cert
   cert-status

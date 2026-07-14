@@ -5,7 +5,7 @@ Mini Proxy is a Windows-focused Go MVP for two local automation tasks:
 - intercept selected HTTPS domain/API responses with a local system proxy and a user-trusted root certificate
 - click multiple buttons in a chosen Windows desktop window using Microsoft UI Automation
 
-The project now includes a Wails desktop console plus the original CLI. The desktop app is the primary experience for starting/stopping the proxy, installing the local certificate, editing rules, and running button automation.
+The project now includes a Wails desktop console plus the original CLI. The desktop app is the primary experience for starting/stopping the proxy, installing the local certificate, viewing interception logs, and running JD mini-program automation.
 
 ## Desktop App
 
@@ -13,8 +13,8 @@ The Wails window provides:
 
 - proxy start/stop with optional Windows system proxy control
 - current-user root certificate status, install, and uninstall
-- JSON rule editing with validation and formatting
-- UI Automation inspect/run controls for configured window button sequences
+- file-based JSON rule loading (default: `configs/jd.rules.json`)
+- JD mini-program automation controls for tab switching cycles
 - runtime paths and latest error/status display
 
 ## Desktop Build
@@ -44,7 +44,7 @@ mini-proxy version
 mini-proxy cert-status
 mini-proxy install-cert
 mini-proxy uninstall-cert
-mini-proxy serve -addr 127.0.0.1:8899 -rules configs/example.rules.json -system-proxy
+mini-proxy serve -addr 127.0.0.1:8899 -rules configs/jd.rules.json -system-proxy
 mini-proxy proxy-on -addr 127.0.0.1:8899
 mini-proxy proxy-restore
 mini-proxy uiauto-inspect -config configs/example.automation.json
