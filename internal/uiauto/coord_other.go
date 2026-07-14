@@ -28,3 +28,8 @@ type CoordCycleOptions struct {
 func RunCoordCycle(_ context.Context, _ CoordCycleOptions, _ *log.Logger, _ func(cycle int)) error {
 	return fmt.Errorf("coordinate UI automation is only supported on Windows")
 }
+
+// CheckWindowAvailable is unsupported outside Windows.
+func CheckWindowAvailable(_ CoordCycleOptions) error {
+	return fmt.Errorf("coordinate UI automation is only supported on Windows")
+}

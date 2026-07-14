@@ -363,7 +363,19 @@ func (service *Service) StartJDAutomation(options uiauto.CoordCycleOptions) (JDA
 		service.mu.Unlock()
 		return service.GetJDAutomationStatus(), fmt.Errorf("JD automation is already running")
 	}
+	service.mu.Unlock()
+
+	// Pre-check that the target mini-program window is already open, so the user
+	// gets an immediate, clear prompt instead of the run failing partway through.
+	if err := uiauto.CheckWindowAvailable(options); err != nil {
+		service.mu.Lock()
+		service.jdAutomationStatus = JDAutomationStatus{Running: false, LastError: err.Error()}
+		service.mu.Unlock()
+		return service.GetJDAutomationStatus(), err
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
+	service.mu.Lock()
 	service.jdAutomationCancel = cancel
 	service.jdAutomationStatus = JDAutomationStatus{Running: true, TotalCycles: options.RepeatCount}
 	service.mu.Unlock()

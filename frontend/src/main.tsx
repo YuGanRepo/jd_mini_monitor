@@ -181,13 +181,30 @@ function App() {
   }
 
   async function toggleJDAutomation(enabled: boolean) {
-    await runTask(async () => {
-      if (enabled) {
-        setJdStatus(await api().StartJDAutomation(jdOptions));
-      } else {
+    if (!enabled) {
+      await runTask(async () => {
         setJdStatus(await api().StopJDAutomation());
+      }, '京东自动化已停止');
+      return;
+    }
+    setNotice('');
+    setBusy(true);
+    try {
+      setJdStatus(await api().StartJDAutomation(jdOptions));
+      setNotice('京东自动化已启动，运行期间请勿移动鼠标或切换窗口');
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setNotice(
+        `无法启动：未找到目标窗口，请先手动打开京东小程序（窗口标题包含“${jdOptions.windowTitleContains}”，宿主进程“${jdOptions.processName}”）。详情：${detail}`,
+      );
+      try {
+        setJdStatus(await api().GetJDAutomationStatus());
+      } catch {
+        // ignore
       }
-    }, enabled ? '京东自动化已启动' : '京东自动化已停止');
+    } finally {
+      setBusy(false);
+    }
   }
 
   const normalizedKeyword = skuKeyword.trim().toLowerCase();
@@ -219,7 +236,7 @@ function App() {
       <section className="topbar">
         <div>
           <p className="eyebrow">Mini Proxy 桌面端</p>
-          <h1>HTTPS 抓包拦截与窗口自动化</h1>
+          <h1>小程序自动化</h1>
         </div>
         <div className={`status-pill ${status.proxyRunning ? 'running' : ''}`}>
           <span />
@@ -308,7 +325,10 @@ function App() {
           </div>
           {jdStatus.lastError && <div className="notice">{jdStatus.lastError}</div>}
           <p className="hint">
-            需要先手动打开京东小程序窗口。仅在购物车"全部"/"服务"页签间切换，不会确认订单或提交支付。
+            需要先手动打开京东小程序窗口（点击“开始”会先检查窗口是否已打开）。仅在购物车"全部"/"服务"页签间切换，不会确认订单或提交支付。
+          </p>
+          <p className="hint">
+            ⚠️ 运行期间会自动把小程序窗口切到前台并操控鼠标点击，请不要同时移动鼠标或切换到其它窗口，否则会点错。
           </p>
         </Panel>
 

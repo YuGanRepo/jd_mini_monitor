@@ -23,6 +23,10 @@ var (
 	procGetWindowThreadProcessId   = user32.NewProc("GetWindowThreadProcessId")
 	procGetWindowRect              = user32.NewProc("GetWindowRect")
 	procSetForegroundWindow        = user32.NewProc("SetForegroundWindow")
+	procGetForegroundWindow        = user32.NewProc("GetForegroundWindow")
+	procAttachThreadInput          = user32.NewProc("AttachThreadInput")
+	procBringWindowToTop           = user32.NewProc("BringWindowToTop")
+	procIsIconic                   = user32.NewProc("IsIconic")
 	procShowWindow                 = user32.NewProc("ShowWindow")
 	procSetCursorPos               = user32.NewProc("SetCursorPos")
 	procMouseEvent                 = user32.NewProc("mouse_event")
@@ -33,6 +37,7 @@ var (
 
 const (
 	swRestore               = 9
+	swShow                  = 5
 	mouseEventFLeftDown     = 0x0002
 	mouseEventFLeftUp       = 0x0004
 	processQueryLimitedInfo = 0x1000
@@ -122,8 +127,11 @@ func RunCoordCycle(ctx context.Context, options CoordCycleOptions, logger *log.L
 		}
 	}
 
-	procShowWindow.Call(window.handle, swRestore)
-	procSetForegroundWindow.Call(window.handle)
+	// Bring the window forward once up front; every click re-asserts foreground
+	// (ensureForeground) in case the user switched windows during a wait.
+	if err := ensureForeground(ctx, window.handle, logf); err != nil {
+		return err
+	}
 	if err := sleepCtx(ctx, 500*time.Millisecond); err != nil {
 		return err
 	}
@@ -137,28 +145,28 @@ func RunCoordCycle(ctx context.Context, options CoordCycleOptions, logger *log.L
 		}
 		logf("jd cart cycle %d/%d starting on window %q", cycle, options.RepeatCount, window.title)
 
-		if err := clickAndLog(window.handle, options.CartTabXRatio, options.CartTabYRatio, "cart tab", logf); err != nil {
+		if err := clickAndLog(ctx, window.handle, options.CartTabXRatio, options.CartTabYRatio, "cart tab", logf); err != nil {
 			return err
 		}
 		if err := sleepCtx(ctx, 500*time.Millisecond); err != nil {
 			return err
 		}
 
-		if err := clickAndLog(window.handle, options.AllTabXRatio, options.AllTabYRatio, "all tab", logf); err != nil {
+		if err := clickAndLog(ctx, window.handle, options.AllTabXRatio, options.AllTabYRatio, "all tab", logf); err != nil {
 			return err
 		}
 		if err := sleepCtx(ctx, time.Duration(options.FirstDelaySeconds)*time.Second); err != nil {
 			return err
 		}
 
-		if err := clickAndLog(window.handle, options.ServiceTabXRatio, options.ServiceTabYRatio, "service tab", logf); err != nil {
+		if err := clickAndLog(ctx, window.handle, options.ServiceTabXRatio, options.ServiceTabYRatio, "service tab", logf); err != nil {
 			return err
 		}
 		if err := sleepCtx(ctx, time.Duration(options.SecondDelaySeconds)*time.Second); err != nil {
 			return err
 		}
 
-		if err := clickAndLog(window.handle, options.AllTabXRatio, options.AllTabYRatio, "all tab", logf); err != nil {
+		if err := clickAndLog(ctx, window.handle, options.AllTabXRatio, options.AllTabYRatio, "all tab", logf); err != nil {
 			return err
 		}
 
@@ -167,13 +175,77 @@ func RunCoordCycle(ctx context.Context, options CoordCycleOptions, logger *log.L
 	return nil
 }
 
-func clickAndLog(handle uintptr, xRatio, yRatio float64, label string, logf func(format string, args ...any)) error {
+// CheckWindowAvailable verifies the target mini-program window is currently open
+// (found by title substring + host process). It returns a helpful error when the
+// window is not found, so callers can prompt the user to open it before starting
+// automation instead of failing partway through.
+func CheckWindowAvailable(options CoordCycleOptions) error {
+	options = options.withDefaults()
+	_, err := findWindow(options.WindowTitleContains, options.ProcessName)
+	return err
+}
+
+func clickAndLog(ctx context.Context, handle uintptr, xRatio, yRatio float64, label string, logf func(format string, args ...any)) error {
+	// Re-assert foreground before every click: coordinate clicks land on whatever
+	// window is on top, so the target must be active first.
+	if err := ensureForeground(ctx, handle, logf); err != nil {
+		return fmt.Errorf("focus window before %s failed: %w", label, err)
+	}
 	x, y, err := clickRatio(handle, xRatio, yRatio)
 	if err != nil {
 		return fmt.Errorf("click %s failed: %w", label, err)
 	}
 	logf("clicked %s at (%d, %d)", label, x, y)
 	return nil
+}
+
+// ensureForeground makes the target window the active foreground window before a
+// click. Windows blocks background processes from stealing focus, so it uses the
+// AttachThreadInput technique (attach to the current foreground thread's input
+// queue) to reliably call SetForegroundWindow, then verifies and retries.
+// It returns an error if the window cannot be activated (e.g. minimized to tray,
+// on another virtual desktop, or a modal system dialog is blocking focus).
+func ensureForeground(ctx context.Context, handle uintptr, logf func(format string, args ...any)) error {
+	const maxAttempts = 5
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if current, _, _ := procGetForegroundWindow.Call(); current == handle {
+			return nil
+		}
+
+		if iconic, _, _ := procIsIconic.Call(handle); iconic != 0 {
+			procShowWindow.Call(handle, swRestore)
+		}
+
+		foreground, _, _ := procGetForegroundWindow.Call()
+		var targetPid, foregroundPid uint32
+		targetThread, _, _ := procGetWindowThreadProcessId.Call(handle, uintptr(unsafe.Pointer(&targetPid)))
+		foregroundThread, _, _ := procGetWindowThreadProcessId.Call(foreground, uintptr(unsafe.Pointer(&foregroundPid)))
+
+		attached := false
+		if foregroundThread != 0 && foregroundThread != targetThread {
+			if r, _, _ := procAttachThreadInput.Call(foregroundThread, targetThread, 1); r != 0 {
+				attached = true
+			}
+		}
+		procBringWindowToTop.Call(handle)
+		procSetForegroundWindow.Call(handle)
+		procShowWindow.Call(handle, swShow)
+		if attached {
+			procAttachThreadInput.Call(foregroundThread, targetThread, 0)
+		}
+
+		if err := sleepCtx(ctx, 250*time.Millisecond); err != nil {
+			return err
+		}
+		if current, _, _ := procGetForegroundWindow.Call(); current == handle {
+			return nil
+		}
+		logf("ensureForeground: attempt %d/%d could not activate target window %#x", attempt, maxAttempts, handle)
+	}
+	return fmt.Errorf("could not bring the target window to the foreground; make sure it is open, not minimized to tray, and on the current desktop")
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {
