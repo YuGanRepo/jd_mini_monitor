@@ -83,10 +83,11 @@ func Serve(options ServeOptions) error {
 	}
 
 	server := proxy.New(proxy.Config{
-		Addr:   options.Addr,
-		Rules:  ruleSet,
-		Certs:  certManager,
-		Logger: logger,
+		Addr:       options.Addr,
+		Rules:      ruleSet,
+		Certs:      certManager,
+		Logger:     logger,
+		CaptureDir: filepath.Join(paths.LogDir, "intercepts"),
 	})
 
 	if options.EnableSystemProxy {

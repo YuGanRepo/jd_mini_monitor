@@ -3,6 +3,7 @@
 import {main} from '../models';
 import {app} from '../models';
 import {proxy} from '../models';
+import {sku} from '../models';
 import {uiauto} from '../models';
 
 export function FormatJSON(arg1:string):Promise<string>;
@@ -13,6 +14,8 @@ export function GetJDAutomationStatus():Promise<app.JDAutomationStatus>;
 
 export function GetRequestLogs():Promise<Array<proxy.RequestLogEntry>>;
 
+export function GetSKUList():Promise<sku.Snapshot>;
+
 export function GetStatus():Promise<app.Status>;
 
 export function InspectAutomation(arg1:string):Promise<string>;
@@ -20,6 +23,8 @@ export function InspectAutomation(arg1:string):Promise<string>;
 export function InstallCert():Promise<app.Status>;
 
 export function ReadTextFile(arg1:string):Promise<string>;
+
+export function ResetSKUList():Promise<sku.Snapshot>;
 
 export function RunAutomation(arg1:string):Promise<app.Status>;
 

@@ -32,6 +32,7 @@ type Rule struct {
 	PathRegex  string            `json:"pathRegex,omitempty"`
 	Query      map[string]string `json:"query,omitempty"`
 	Headers    map[string]string `json:"headers,omitempty"`
+	Extract    string            `json:"extract,omitempty"`
 	Action     Action            `json:"action"`
 
 	order      int
@@ -158,6 +159,13 @@ func (rule *Rule) compile(baseDir string) error {
 	}
 	if rule.Action.DelayMS < 0 {
 		return fmt.Errorf("rule %q delayMs cannot be negative", rule.Name)
+	}
+	if rule.Extract != "" {
+		switch rule.Extract {
+		case "jd-cartview":
+		default:
+			return fmt.Errorf("rule %q has unsupported extract target %q", rule.Name, rule.Extract)
+		}
 	}
 	if rule.Action.BodyFile != "" {
 		bodyPath := rule.Action.BodyFile

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { api, DesktopDefaults, JDAutomationOptions, JDAutomationStatus, RequestLogEntry, Status } from './wails';
+import { api, DesktopDefaults, JDAutomationOptions, JDAutomationStatus, RequestLogEntry, SKUEntry, SKUSnapshot, Status } from './wails';
 import './styles.css';
 
 const emptyStatus: Status = {
@@ -52,6 +52,17 @@ function App() {
   const [jdOptions, setJdOptions] = useState<JDAutomationOptions>(defaultJDOptions);
   const [jdStatus, setJdStatus] = useState<JDAutomationStatus>(emptyJDStatus);
   const [requestLogs, setRequestLogs] = useState<RequestLogEntry[]>([]);
+  const [skuList, setSkuList] = useState<SKUEntry[]>([]);
+  const [showOnlyChanged, setShowOnlyChanged] = useState(false);
+  const [showOnlyPriceDrop, setShowOnlyPriceDrop] = useState(false);
+  const [showOnlyInStock, setShowOnlyInStock] = useState(false);
+  const [skuKeyword, setSkuKeyword] = useState('');
+  const [skuSortBy, setSkuSortBy] = useState<'default' | 'dropDesc' | 'finalAsc'>('default');
+  const [skuMeta, setSkuMeta] = useState<{ parseCount: number; totalSku: number; updatedAt: string }>({
+    parseCount: 0,
+    totalSku: 0,
+    updatedAt: '',
+  });
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -68,6 +79,18 @@ function App() {
         // ignore transient polling errors
       }
     }, 1500);
+    return () => window.clearInterval(timer);
+  }, [status.proxyRunning]);
+
+  useEffect(() => {
+    if (!status.proxyRunning) return;
+    const timer = window.setInterval(async () => {
+      try {
+        applySkuSnapshot(await api().GetSKUList());
+      } catch {
+        // ignore transient polling errors
+      }
+    }, 2000);
     return () => window.clearInterval(timer);
   }, [status.proxyRunning]);
 
@@ -92,6 +115,11 @@ function App() {
       setProxyOverride(loadedDefaults.proxyOverride);
       const nextStatus = await api().GetStatus();
       setStatus(nextStatus);
+      try {
+        applySkuSnapshot(await api().GetSKUList());
+      } catch {
+        // SKU list is optional; ignore if backend is older
+      }
     }, '已就绪');
   }
 
@@ -125,6 +153,21 @@ function App() {
     setRequestLogs(await api().GetRequestLogs());
   }
 
+  function applySkuSnapshot(snapshot: SKUSnapshot) {
+    setSkuList(snapshot.entries ?? []);
+    setSkuMeta({ parseCount: snapshot.parseCount, totalSku: snapshot.totalSku, updatedAt: snapshot.updatedAt });
+  }
+
+  async function refreshSkuList() {
+    applySkuSnapshot(await api().GetSKUList());
+  }
+
+  async function resetSkuList() {
+    await runTask(async () => {
+      applySkuSnapshot(await api().ResetSKUList());
+    }, 'SKU 列表已清空');
+  }
+
   async function installCert() {
     await runTask(async () => {
       setStatus(await api().InstallCert());
@@ -146,6 +189,30 @@ function App() {
       }
     }, enabled ? '京东自动化已启动' : '京东自动化已停止');
   }
+
+  const normalizedKeyword = skuKeyword.trim().toLowerCase();
+  const filteredSkuList = skuList.filter((entry) => {
+    if (showOnlyChanged && !entry.priceChanged) return false;
+    if (showOnlyPriceDrop && !(entry.priceChanged && entry.finalDeltaCents < 0)) return false;
+    if (showOnlyInStock && (entry.stockCode === 1 || entry.stockDesc.includes('无货'))) return false;
+    if (normalizedKeyword) {
+      const haystack = `${entry.name} ${entry.itemId} ${entry.vendorName} ${entry.vendorId}`.toLowerCase();
+      if (!haystack.includes(normalizedKeyword)) return false;
+    }
+    return true;
+  }).sort((left, right) => {
+    if (skuSortBy === 'dropDesc') {
+      const leftDrop = left.finalDeltaCents < 0 ? Math.abs(left.finalDeltaCents) : 0;
+      const rightDrop = right.finalDeltaCents < 0 ? Math.abs(right.finalDeltaCents) : 0;
+      if (leftDrop !== rightDrop) return rightDrop - leftDrop;
+      return right.updateCount - left.updateCount;
+    }
+    if (skuSortBy === 'finalAsc') {
+      if (left.finalPriceCents !== right.finalPriceCents) return left.finalPriceCents - right.finalPriceCents;
+      return right.updateCount - left.updateCount;
+    }
+    return 0;
+  });
 
   return (
     <main className="shell">
@@ -274,6 +341,93 @@ function App() {
           </div>
         </Panel>
 
+        <Panel title="京东购物车 SKU" accent="violet" full>
+          <div className="editor-toolbar">
+            <span className="validation">
+              {`已解析 ${skuMeta.parseCount} 次 · 共 ${skuMeta.totalSku} 个 SKU · 当前显示 ${filteredSkuList.length} 个`}
+              {skuMeta.updatedAt && ` · 更新于 ${new Date(skuMeta.updatedAt).toLocaleTimeString()}`}
+            </span>
+            <div className="button-row compact">
+              <button type="button" onClick={() => void refreshSkuList()} disabled={busy}>刷新</button>
+              <button type="button" onClick={() => void resetSkuList()} disabled={busy}>清空</button>
+            </div>
+          </div>
+          <div className="sku-filter-row">
+            <label className="toggle-line">
+              <input
+                type="checkbox"
+                checked={showOnlyChanged}
+                onChange={(event) => setShowOnlyChanged(event.target.checked)}
+              />
+              仅看价格变化
+            </label>
+            <label className="toggle-line">
+              <input
+                type="checkbox"
+                checked={showOnlyPriceDrop}
+                onChange={(event) => setShowOnlyPriceDrop(event.target.checked)}
+              />
+              仅看降价
+            </label>
+            <label className="toggle-line">
+              <input
+                type="checkbox"
+                checked={showOnlyInStock}
+                onChange={(event) => setShowOnlyInStock(event.target.checked)}
+              />
+              仅看有货
+            </label>
+            <select
+              className="sku-filter-sort"
+              value={skuSortBy}
+              onChange={(event) => setSkuSortBy(event.target.value as 'default' | 'dropDesc' | 'finalAsc')}
+            >
+              <option value="default">默认顺序</option>
+              <option value="dropDesc">按降价幅度</option>
+              <option value="finalAsc">按到手价升序</option>
+            </select>
+            <input
+              className="sku-filter-search"
+              type="text"
+              value={skuKeyword}
+              onChange={(event) => setSkuKeyword(event.target.value)}
+              placeholder="按商品名 / SKU / 店铺筛选"
+            />
+          </div>
+          <div className="log-list">
+            {skuList.length === 0 && (
+              <div className="log-empty">暂无 SKU。命中 extract 规则的京东购物车响应会解析并显示在这里。</div>
+            )}
+            {skuList.length > 0 && filteredSkuList.length === 0 && (
+              <div className="log-empty">当前筛选条件下没有结果，请放宽条件后再试。</div>
+            )}
+            {filteredSkuList.map((entry) => (
+              <div className="log-card" key={entry.itemId}>
+                <div className="log-card-top">
+                  <span className="log-tag log-tag-action">{formatYuan(entry.finalPriceCents)}</span>
+                  {entry.discountCents > 0 && (
+                    <span className="log-tag log-tag-method">省{formatYuan(entry.discountCents)}</span>
+                  )}
+                  {entry.priceChanged && (
+                    <span className={`log-tag ${entry.finalDeltaCents < 0 ? 'log-tag-status' : 'log-tag-method'}`}>
+                      {entry.finalDeltaCents < 0 ? '降' : '涨'}{formatYuan(Math.abs(entry.finalDeltaCents))}
+                    </span>
+                  )}
+                  {entry.stockDesc && <span className="log-tag log-tag-status">{entry.stockDesc}</span>}
+                  <span className="log-time">×{entry.updateCount}</span>
+                </div>
+                <div className="log-card-bottom">
+                  <span className="log-rule">{entry.vendorName || entry.vendorId || '未知店铺'}</span>
+                  <span className="log-url" title={entry.name}>{entry.name || entry.itemId}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+          <p className="hint">
+            价格为「到手价」，含 landedPrice 时按其计算，否则回退到页面价。降/涨标签对比上一次抓取到的到手价。
+          </p>
+        </Panel>
+
         <Panel title="证书与运行时" accent="gold" full>
           <div className="metric-list">
             <Metric label="证书信任" value={status.rootTrusted ? '已信任' : '未信任'} tone={status.rootTrusted ? 'good' : 'warn'} />
@@ -313,6 +467,10 @@ function Metric({ label, value, tone, compact }: { label: string; value: string;
       <strong title={value}>{value}</strong>
     </div>
   );
+}
+
+function formatYuan(cents: number): string {
+  return `¥${(cents / 100).toFixed(2)}`;
 }
 
 createRoot(document.getElementById('root')!).render(<App />);

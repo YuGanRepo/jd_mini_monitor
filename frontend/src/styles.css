@@ -233,6 +233,19 @@ h2 {
   height: 18px;
 }
 
+.sku-filter-row {
+  display: grid;
+  grid-template-columns: auto auto auto 150px minmax(220px, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.sku-filter-sort,
+.sku-filter-search {
+  height: 36px;
+  padding: 0 11px;
+}
+
 .button-row {
   display: flex;
   flex-wrap: wrap;
@@ -438,5 +451,10 @@ h2 {
 
   .panel.wide {
     grid-row: auto;
+  }
+
+  .sku-filter-row {
+    grid-template-columns: 1fr;
+    justify-items: start;
   }
 }

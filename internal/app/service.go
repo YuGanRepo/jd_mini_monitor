@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -13,6 +14,7 @@ import (
 	"mini-proxy/internal/cert"
 	"mini-proxy/internal/proxy"
 	"mini-proxy/internal/rules"
+	"mini-proxy/internal/sku"
 	"mini-proxy/internal/uiauto"
 	"mini-proxy/internal/winproxy"
 )
@@ -45,6 +47,7 @@ type Service struct {
 	cleanupLogger     func()
 	certManager       *cert.Manager
 	proxyServer       *proxy.Server
+	skuStore          *sku.Store
 	rulesPath         string
 	addr              string
 	systemProxyActive bool
@@ -68,15 +71,39 @@ func NewService() (*Service, error) {
 		cleanup()
 		return nil, err
 	}
+	skuStore := sku.NewStore()
+	if err := loadSKUSnapshot(filepath.Join(paths.LogDir, "intercepts", "sku-latest.json"), skuStore); err != nil {
+		logger.Printf("load sku snapshot failed: %v", err)
+	}
 
 	return &Service{
 		paths:         paths,
 		logger:        logger,
 		cleanupLogger: cleanup,
 		certManager:   certManager,
+		skuStore:      skuStore,
 		addr:          "127.0.0.1:8899",
 		rulesPath:     "configs/jd.rules.json",
 	}, nil
+}
+
+func loadSKUSnapshot(path string, store *sku.Store) error {
+	if store == nil {
+		return nil
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	var snapshot sku.Snapshot
+	if err := json.Unmarshal(content, &snapshot); err != nil {
+		return err
+	}
+	store.LoadSnapshot(snapshot)
+	return nil
 }
 
 func (service *Service) Status() Status {
@@ -111,6 +138,29 @@ func (service *Service) GetRequestLogs() []proxy.RequestLogEntry {
 	return server.RecentLogs()
 }
 
+// GetSKUList returns the SKU list accumulated from intercepted JD cartview
+// responses. The store is owned by the service, so the list persists across
+// proxy restarts within a single app session.
+func (service *Service) GetSKUList() sku.Snapshot {
+	service.mu.Lock()
+	store := service.skuStore
+	service.mu.Unlock()
+	if store == nil {
+		return sku.Snapshot{}
+	}
+	return store.Snapshot()
+}
+
+// ResetSKUList clears every accumulated SKU and its change history.
+func (service *Service) ResetSKUList() {
+	service.mu.Lock()
+	store := service.skuStore
+	service.mu.Unlock()
+	if store != nil {
+		store.Reset()
+	}
+}
+
 func (service *Service) StartProxy(options ServeOptions) (Status, error) {
 	service.mu.Lock()
 	if service.proxyServer != nil {
@@ -142,10 +192,12 @@ func (service *Service) StartProxy(options ServeOptions) (Status, error) {
 	}
 
 	proxyServer := proxy.New(proxy.Config{
-		Addr:   options.Addr,
-		Rules:  ruleSet,
-		Certs:  service.certManager,
-		Logger: service.logger,
+		Addr:       options.Addr,
+		Rules:      ruleSet,
+		Certs:      service.certManager,
+		Logger:     service.logger,
+		SKUStore:   service.skuStore,
+		CaptureDir: filepath.Join(service.paths.LogDir, "intercepts"),
 	})
 	listener, err := net.Listen("tcp", proxyServer.Addr())
 	if err != nil {

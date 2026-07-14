@@ -18,6 +18,10 @@ export function GetRequestLogs() {
   return window['go']['main']['DesktopApp']['GetRequestLogs']();
 }
 
+export function GetSKUList() {
+  return window['go']['main']['DesktopApp']['GetSKUList']();
+}
+
 export function GetStatus() {
   return window['go']['main']['DesktopApp']['GetStatus']();
 }
@@ -32,6 +36,10 @@ export function InstallCert() {
 
 export function ReadTextFile(arg1) {
   return window['go']['main']['DesktopApp']['ReadTextFile'](arg1);
+}
+
+export function ResetSKUList() {
+  return window['go']['main']['DesktopApp']['ResetSKUList']();
 }
 
 export function RunAutomation(arg1) {

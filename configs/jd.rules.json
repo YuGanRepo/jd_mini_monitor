@@ -1,17 +1,14 @@
 {
   "rules": [
     {
-      "name": "仅拦截京东购物车查询接口",
+      "name": "解析京东购物车 SKU",
       "enabled": true,
       "priority": 100,
       "host": "api.m.jd.com",
-      "method": "GET",
       "path": "/client.action/deal/mshopcart/cartview",
+      "extract": "jd-cartview",
       "action": {
-        "type": "mock",
-        "status": 200,
-        "contentType": "application/json; charset=utf-8",
-        "body": "{\"ok\":true}"
+        "type": "passthrough"
       }
     }
   ]

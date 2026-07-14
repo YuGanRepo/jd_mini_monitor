@@ -12,6 +12,7 @@ import (
 	coreapp "mini-proxy/internal/app"
 	"mini-proxy/internal/proxy"
 	"mini-proxy/internal/rules"
+	"mini-proxy/internal/sku"
 	"mini-proxy/internal/uiauto"
 )
 
@@ -164,4 +165,13 @@ func (app *DesktopApp) GetJDAutomationStatus() coreapp.JDAutomationStatus {
 
 func (app *DesktopApp) GetRequestLogs() []proxy.RequestLogEntry {
 	return app.service.GetRequestLogs()
+}
+
+func (app *DesktopApp) GetSKUList() sku.Snapshot {
+	return app.service.GetSKUList()
+}
+
+func (app *DesktopApp) ResetSKUList() sku.Snapshot {
+	app.service.ResetSKUList()
+	return app.service.GetSKUList()
 }

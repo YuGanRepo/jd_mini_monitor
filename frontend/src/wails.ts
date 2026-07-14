@@ -62,6 +62,32 @@ export type RequestLogEntry = {
   status?: number;
 };
 
+export type SKUEntry = {
+  itemId: string;
+  name: string;
+  vendorId: string;
+  vendorName: string;
+  pagePriceCents: number;
+  finalPriceCents: number;
+  discountCents: number;
+  num: number;
+  stockCode: number;
+  stockDesc: string;
+  firstSeen: string;
+  lastUpdated: string;
+  updateCount: number;
+  prevFinalCents: number;
+  finalDeltaCents: number;
+  priceChanged: boolean;
+};
+
+export type SKUSnapshot = {
+  entries: SKUEntry[] | null;
+  updatedAt: string;
+  parseCount: number;
+  totalSku: number;
+};
+
 type DesktopApi = {
   GetDefaults(): Promise<DesktopDefaults>;
   GetStatus(): Promise<Status>;
@@ -80,6 +106,8 @@ type DesktopApi = {
   StopJDAutomation(): Promise<JDAutomationStatus>;
   GetJDAutomationStatus(): Promise<JDAutomationStatus>;
   GetRequestLogs(): Promise<RequestLogEntry[]>;
+  GetSKUList(): Promise<SKUSnapshot>;
+  ResetSKUList(): Promise<SKUSnapshot>;
 };
 
 declare global {
