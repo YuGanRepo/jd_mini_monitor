@@ -1,0 +1,29 @@
+{
+  "sequences": [
+    {
+      "name": "notepad sample buttons",
+      "window": {
+        "titleContains": "Untitled",
+        "process": "notepad",
+        "timeoutMs": 10000
+      },
+      "repeat": 1,
+      "steps": [
+        {
+          "name": "click save-like button by text",
+          "buttonContains": "Save",
+          "timeoutMs": 5000,
+          "retry": 1,
+          "fallbackToCursor": true
+        },
+        {
+          "name": "click cancel by automation id",
+          "automationId": "2",
+          "delayMs": 300,
+          "timeoutMs": 5000,
+          "fallbackToCursor": true
+        }
+      ]
+    }
+  ]
+}

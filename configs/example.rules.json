@@ -1,0 +1,39 @@
+{
+  "rules": [
+    {
+      "name": "mock user profile",
+      "enabled": true,
+      "priority": 100,
+      "host": "api.example.com",
+      "method": "GET",
+      "path": "/v1/user/profile",
+      "action": {
+        "type": "mock",
+        "status": 200,
+        "contentType": "application/json; charset=utf-8",
+        "headers": {
+          "Cache-Control": "no-store"
+        },
+        "body": "{\"id\":\"local-user\",\"name\":\"Mini Proxy\",\"role\":\"tester\"}"
+      }
+    },
+    {
+      "name": "modify orders response",
+      "enabled": false,
+      "priority": 50,
+      "hostSuffix": "example.com",
+      "method": "POST",
+      "pathRegex": "^/v[0-9]+/orders$",
+      "query": {
+        "debug": "1"
+      },
+      "action": {
+        "type": "modify",
+        "status": 202,
+        "contentType": "application/json; charset=utf-8",
+        "delayMs": 200,
+        "body": "{\"accepted\":true,\"source\":\"mini-proxy\"}"
+      }
+    }
+  ]
+}
