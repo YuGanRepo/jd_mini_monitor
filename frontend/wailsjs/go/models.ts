@@ -273,7 +273,6 @@ export namespace uiauto {
 	    serviceTabXRatio: number;
 	    serviceTabYRatio: number;
 	    firstDelaySeconds: number;
-	    secondDelaySeconds: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new CoordCycleOptions(source);
@@ -291,7 +290,6 @@ export namespace uiauto {
 	        this.serviceTabXRatio = source["serviceTabXRatio"];
 	        this.serviceTabYRatio = source["serviceTabYRatio"];
 	        this.firstDelaySeconds = source["firstDelaySeconds"];
-	        this.secondDelaySeconds = source["secondDelaySeconds"];
 	    }
 	}
 

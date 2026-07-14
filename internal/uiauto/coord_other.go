@@ -21,7 +21,6 @@ type CoordCycleOptions struct {
 	ServiceTabXRatio    float64 `json:"serviceTabXRatio"`
 	ServiceTabYRatio    float64 `json:"serviceTabYRatio"`
 	FirstDelaySeconds   int     `json:"firstDelaySeconds"`
-	SecondDelaySeconds  int     `json:"secondDelaySeconds"`
 }
 
 // RunCoordCycle is unsupported outside Windows.

@@ -43,7 +43,6 @@ export type JDAutomationOptions = {
   serviceTabXRatio: number;
   serviceTabYRatio: number;
   firstDelaySeconds: number;
-  secondDelaySeconds: number;
 };
 
 export type JDAutomationStatus = {

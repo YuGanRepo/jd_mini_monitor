@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -30,8 +31,12 @@ var (
 	procShowWindow                 = user32.NewProc("ShowWindow")
 	procSetCursorPos               = user32.NewProc("SetCursorPos")
 	procMouseEvent                 = user32.NewProc("mouse_event")
+	procKeybdEvent                 = user32.NewProc("keybd_event")
+	procSystemParametersInfoW      = user32.NewProc("SystemParametersInfoW")
+	procSetWindowPos               = user32.NewProc("SetWindowPos")
 	procOpenProcess                = kernel32.NewProc("OpenProcess")
 	procCloseHandle                = kernel32.NewProc("CloseHandle")
+	procGetCurrentThreadId         = kernel32.NewProc("GetCurrentThreadId")
 	procQueryFullProcessImageNameW = kernel32.NewProc("QueryFullProcessImageNameW")
 )
 
@@ -41,6 +46,22 @@ const (
 	mouseEventFLeftDown     = 0x0002
 	mouseEventFLeftUp       = 0x0004
 	processQueryLimitedInfo = 0x1000
+	// serviceToAllFixedDelaySeconds is the fixed wait after clicking 服务 before
+	// switching back to 全部. This part of the flow is not user-configurable.
+	serviceToAllFixedDelaySeconds = 5
+	vkMenu                        = 0x12 // ALT
+	keyEventFKeyUp                = 0x0002
+	spiSetForegroundLockTimeout   = 0x2001
+	spifSendChange                = 0x0002
+	swpNoSize                     = 0x0001
+	swpNoMove                     = 0x0002
+	swpShowWindow                 = 0x0040
+)
+
+// HWND_TOPMOST (-1) / HWND_NOTOPMOST (-2) as uintptr values.
+var (
+	hwndTopmost   = ^uintptr(0) // -1
+	hwndNotopmost = ^uintptr(1) // -2
 )
 
 type windowRect struct {
@@ -68,7 +89,6 @@ type CoordCycleOptions struct {
 	ServiceTabXRatio    float64 `json:"serviceTabXRatio"`
 	ServiceTabYRatio    float64 `json:"serviceTabYRatio"`
 	FirstDelaySeconds   int     `json:"firstDelaySeconds"`
-	SecondDelaySeconds  int     `json:"secondDelaySeconds"`
 }
 
 func (options CoordCycleOptions) withDefaults() CoordCycleOptions {
@@ -77,9 +97,6 @@ func (options CoordCycleOptions) withDefaults() CoordCycleOptions {
 	}
 	if options.WindowTitleContains == "" {
 		options.WindowTitleContains = "京东"
-	}
-	if options.RepeatCount <= 0 {
-		options.RepeatCount = 1
 	}
 	if options.CartTabXRatio <= 0 {
 		options.CartTabXRatio = 0.70
@@ -102,15 +119,14 @@ func (options CoordCycleOptions) withDefaults() CoordCycleOptions {
 	if options.FirstDelaySeconds <= 0 {
 		options.FirstDelaySeconds = 30
 	}
-	if options.SecondDelaySeconds <= 0 {
-		options.SecondDelaySeconds = 5
-	}
 	return options
 }
 
-// RunCoordCycle brings the target mini program window to the foreground, then repeats:
-// click the cart tab, click "全部", wait FirstDelaySeconds, click "服务",
-// wait SecondDelaySeconds, click "全部" again. onCycle, if non-nil, is called with the
+// RunCoordCycle brings the target mini program window to the foreground, makes sure
+// it is on the cart page (clicks the cart tab in the bottom nav once up front), then
+// repeats: click the cart tab, click "全部", wait FirstDelaySeconds, click "服务",
+// wait a fixed 5s, click "全部" again. When RepeatCount <= 0 the cycle repeats
+// indefinitely until the context is cancelled. onCycle, if non-nil, is called with the
 // 1-based cycle index before each cycle starts. The context can be cancelled to stop
 // between clicks/waits.
 func RunCoordCycle(ctx context.Context, options CoordCycleOptions, logger *log.Logger, onCycle func(cycle int)) error {
@@ -136,14 +152,29 @@ func RunCoordCycle(ctx context.Context, options CoordCycleOptions, logger *log.L
 		return err
 	}
 
-	for cycle := 1; cycle <= options.RepeatCount; cycle++ {
+	// Make sure we start on the cart page. We cannot read the mini program's UI tree
+	// to detect the current page, so click the cart tab in the bottom nav once up
+	// front (harmless if already on the cart page) and give it time to load before
+	// the 全部/服务 cycling begins.
+	if err := clickAndLog(ctx, window.handle, options.CartTabXRatio, options.CartTabYRatio, "cart tab (ensure cart page)", logf); err != nil {
+		return err
+	}
+	if err := sleepCtx(ctx, 1500*time.Millisecond); err != nil {
+		return err
+	}
+
+	totalLabel := strconv.Itoa(options.RepeatCount)
+	if options.RepeatCount <= 0 {
+		totalLabel = "\u221e"
+	}
+	for cycle := 1; options.RepeatCount <= 0 || cycle <= options.RepeatCount; cycle++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if onCycle != nil {
 			onCycle(cycle)
 		}
-		logf("jd cart cycle %d/%d starting on window %q", cycle, options.RepeatCount, window.title)
+		logf("jd cart cycle %d/%s starting on window %q", cycle, totalLabel, window.title)
 
 		if err := clickAndLog(ctx, window.handle, options.CartTabXRatio, options.CartTabYRatio, "cart tab", logf); err != nil {
 			return err
@@ -162,7 +193,7 @@ func RunCoordCycle(ctx context.Context, options CoordCycleOptions, logger *log.L
 		if err := clickAndLog(ctx, window.handle, options.ServiceTabXRatio, options.ServiceTabYRatio, "service tab", logf); err != nil {
 			return err
 		}
-		if err := sleepCtx(ctx, time.Duration(options.SecondDelaySeconds)*time.Second); err != nil {
+		if err := sleepCtx(ctx, serviceToAllFixedDelaySeconds*time.Second); err != nil {
 			return err
 		}
 
@@ -170,7 +201,7 @@ func RunCoordCycle(ctx context.Context, options CoordCycleOptions, logger *log.L
 			return err
 		}
 
-		logf("jd cart cycle %d/%d finished", cycle, options.RepeatCount)
+		logf("jd cart cycle %d/%s finished", cycle, totalLabel)
 	}
 	return nil
 }
@@ -206,7 +237,13 @@ func clickAndLog(ctx context.Context, handle uintptr, xRatio, yRatio float64, la
 // It returns an error if the window cannot be activated (e.g. minimized to tray,
 // on another virtual desktop, or a modal system dialog is blocking focus).
 func ensureForeground(ctx context.Context, handle uintptr, logf func(format string, args ...any)) error {
-	const maxAttempts = 5
+	// Windows blocks background processes from stealing focus. Lowering the
+	// foreground-lock timeout to 0 lets our SetForegroundWindow calls take effect.
+	procSystemParametersInfoW.Call(spiSetForegroundLockTimeout, 0, 0, spifSendChange)
+
+	currentThread, _, _ := procGetCurrentThreadId.Call()
+
+	const maxAttempts = 6
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -219,21 +256,43 @@ func ensureForeground(ctx context.Context, handle uintptr, logf func(format stri
 			procShowWindow.Call(handle, swRestore)
 		}
 
+		// Synthetic ALT tap: Windows only allows a foreground change shortly after
+		// keyboard input, so this "unlocks" SetForegroundWindow for our thread.
+		procKeybdEvent.Call(vkMenu, 0, 0, 0)
+		procKeybdEvent.Call(vkMenu, 0, keyEventFKeyUp, 0)
+
 		foreground, _, _ := procGetForegroundWindow.Call()
 		var targetPid, foregroundPid uint32
 		targetThread, _, _ := procGetWindowThreadProcessId.Call(handle, uintptr(unsafe.Pointer(&targetPid)))
 		foregroundThread, _, _ := procGetWindowThreadProcessId.Call(foreground, uintptr(unsafe.Pointer(&foregroundPid)))
 
-		attached := false
+		// Attach both the current foreground thread and our own thread to the
+		// target's input queue so the OS lets us change focus and z-order.
+		attachedFg := false
 		if foregroundThread != 0 && foregroundThread != targetThread {
 			if r, _, _ := procAttachThreadInput.Call(foregroundThread, targetThread, 1); r != 0 {
-				attached = true
+				attachedFg = true
 			}
 		}
-		procBringWindowToTop.Call(handle)
-		procSetForegroundWindow.Call(handle)
+		attachedCur := false
+		if currentThread != 0 && currentThread != targetThread && currentThread != foregroundThread {
+			if r, _, _ := procAttachThreadInput.Call(currentThread, targetThread, 1); r != 0 {
+				attachedCur = true
+			}
+		}
+
 		procShowWindow.Call(handle, swShow)
-		if attached {
+		procBringWindowToTop.Call(handle)
+		// Briefly force the window above all others, then drop back so it does not
+		// stay permanently always-on-top.
+		procSetWindowPos.Call(handle, hwndTopmost, 0, 0, 0, 0, swpNoMove|swpNoSize|swpShowWindow)
+		procSetWindowPos.Call(handle, hwndNotopmost, 0, 0, 0, 0, swpNoMove|swpNoSize|swpShowWindow)
+		procSetForegroundWindow.Call(handle)
+
+		if attachedCur {
+			procAttachThreadInput.Call(currentThread, targetThread, 0)
+		}
+		if attachedFg {
 			procAttachThreadInput.Call(foregroundThread, targetThread, 0)
 		}
 
@@ -243,7 +302,7 @@ func ensureForeground(ctx context.Context, handle uintptr, logf func(format stri
 		if current, _, _ := procGetForegroundWindow.Call(); current == handle {
 			return nil
 		}
-		logf("ensureForeground: attempt %d/%d could not activate target window %#x", attempt, maxAttempts, handle)
+		logf("ensureForeground: attempt %d/%d could not activate target window %#x (foreground=%#x)", attempt, maxAttempts, handle, foreground)
 	}
 	return fmt.Errorf("could not bring the target window to the foreground; make sure it is open, not minimized to tray, and on the current desktop")
 }

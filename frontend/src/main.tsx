@@ -28,7 +28,6 @@ const defaultJDOptions: JDAutomationOptions = {
   serviceTabXRatio: 0.62,
   serviceTabYRatio: 0.108,
   firstDelaySeconds: 30,
-  secondDelaySeconds: 5,
 };
 
 const emptyJDStatus: JDAutomationStatus = {
@@ -207,6 +206,7 @@ function App() {
     }
   }
 
+  const jdInfinite = jdOptions.repeatCount <= 0;
   const normalizedKeyword = skuKeyword.trim().toLowerCase();
   const filteredSkuList = skuList.filter((entry) => {
     if (showOnlyChanged && !entry.priceChanged) return false;
@@ -286,13 +286,13 @@ function App() {
               <input
                 type="number"
                 min={1}
-                value={jdOptions.repeatCount}
+                value={jdInfinite ? '' : jdOptions.repeatCount}
                 onChange={(event) => setJdOptions({ ...jdOptions, repeatCount: Number(event.target.value) })}
-                disabled={jdStatus.running || busy}
+                disabled={jdInfinite || jdStatus.running || busy}
               />
             </label>
             <label>
-              点"服务"前等待秒数
+              在"全部"停留秒数
               <input
                 type="number"
                 min={0}
@@ -302,15 +302,14 @@ function App() {
               />
             </label>
           </div>
-          <label>
-            点回"全部"前等待秒数
+          <label className="toggle-line">
             <input
-              type="number"
-              min={0}
-              value={jdOptions.secondDelaySeconds}
-              onChange={(event) => setJdOptions({ ...jdOptions, secondDelaySeconds: Number(event.target.value) })}
+              type="checkbox"
+              checked={jdInfinite}
+              onChange={(event) => setJdOptions({ ...jdOptions, repeatCount: event.target.checked ? 0 : 1 })}
               disabled={jdStatus.running || busy}
             />
+            无限循环（一直运行，直到手动停止）
           </label>
           <div className="button-row">
             <button type="button" className="primary" onClick={() => void toggleJDAutomation(true)} disabled={jdStatus.running || busy}>开始</button>
@@ -319,13 +318,19 @@ function App() {
           <div className="metric-list">
             <Metric
               label="状态"
-              value={jdStatus.running ? `运行中 (${jdStatus.currentCycle}/${jdStatus.totalCycles})` : '已停止'}
+              value={
+                jdStatus.running
+                  ? jdStatus.totalCycles > 0
+                    ? `运行中 (${jdStatus.currentCycle}/${jdStatus.totalCycles})`
+                    : `运行中 (第 ${jdStatus.currentCycle} 次 · 无限)`
+                  : '已停止'
+              }
               tone={jdStatus.running ? 'good' : undefined}
             />
           </div>
           {jdStatus.lastError && <div className="notice">{jdStatus.lastError}</div>}
           <p className="hint">
-            需要先手动打开京东小程序窗口（点击“开始”会先检查窗口是否已打开）。仅在购物车"全部"/"服务"页签间切换，不会确认订单或提交支付。
+            需要先手动打开京东小程序窗口（点击“开始”会先检查窗口是否已打开）。仅在购物车"全部"/"服务"页签间切换，切到"服务"后固定停留 5 秒再切回"全部"，不会确认订单或提交支付。
           </p>
           <p className="hint">
             ⚠️ 运行期间会自动把小程序窗口切到前台并操控鼠标点击，请不要同时移动鼠标或切换到其它窗口，否则会点错。
