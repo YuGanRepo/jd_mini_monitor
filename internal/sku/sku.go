@@ -274,6 +274,9 @@ type UpdateResult struct {
 	Parsed  int `json:"parsed"`
 	Changed int `json:"changed"`
 	Total   int `json:"total"`
+	// ChangedEntries holds a copy of every entry whose final price changed on
+	// this capture, in no particular order. It is used to drive notifications.
+	ChangedEntries []Entry `json:"changedEntries,omitempty"`
 }
 
 // Snapshot is an immutable copy of the store returned to callers/UI.
@@ -308,6 +311,7 @@ func (store *Store) Update(skus []SKU) UpdateResult {
 	store.parseCount++
 	store.updatedAt = now
 	changed := 0
+	var changedEntries []Entry
 
 	for _, item := range skus {
 		existing, ok := store.entries[item.ItemID]
@@ -333,9 +337,12 @@ func (store *Store) Update(skus []SKU) UpdateResult {
 		existing.SKU = item
 		existing.LastUpdated = now
 		existing.UpdateCount++
+		if existing.PriceChanged {
+			changedEntries = append(changedEntries, *existing)
+		}
 	}
 
-	return UpdateResult{Parsed: len(skus), Changed: changed, Total: len(store.entries)}
+	return UpdateResult{Parsed: len(skus), Changed: changed, Total: len(store.entries), ChangedEntries: changedEntries}
 }
 
 // Snapshot returns a copy of every stored SKU, most recently updated first.

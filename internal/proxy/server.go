@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"mini-proxy/internal/cert"
+	"mini-proxy/internal/notify"
 	"mini-proxy/internal/rules"
 	"mini-proxy/internal/sku"
 )
@@ -46,6 +47,7 @@ type Config struct {
 	Certs      *cert.Manager
 	Logger     *log.Logger
 	SKUStore   *sku.Store
+	Notifier   *notify.Notifier
 	CaptureDir string
 }
 
@@ -55,6 +57,7 @@ type Server struct {
 	certs      *cert.Manager
 	logger     *log.Logger
 	skuStore   *sku.Store
+	notifier   *notify.Notifier
 	captureDir string
 	httpServer *http.Server
 	transport  *http.Transport
@@ -83,6 +86,7 @@ func New(config Config) *Server {
 		certs:      config.Certs,
 		logger:     logger,
 		skuStore:   skuStore,
+		notifier:   config.Notifier,
 		captureDir: config.CaptureDir,
 		transport: &http.Transport{
 			Proxy:                 nil,
@@ -436,6 +440,54 @@ func (server *Server) SKUSnapshot() sku.Snapshot {
 	return server.skuStore.Snapshot()
 }
 
+// notifyPriceChanges pushes a DingTalk notification for the SKUs whose final
+// price changed on the latest capture. Delivery runs in its own goroutine so a
+// slow or failing webhook never blocks the proxied response. Failures are logged
+// only.
+func (server *Server) notifyPriceChanges(changed []sku.Entry) {
+	if server.notifier == nil || !server.notifier.Enabled() || len(changed) == 0 {
+		return
+	}
+	changes := make([]notify.Change, 0, len(changed))
+	for _, entry := range changed {
+		changes = append(changes, notify.Change{
+			ItemID:     entry.ItemID,
+			Name:       entry.Name,
+			VendorName: entry.VendorName,
+			Num:        entry.Num,
+			StockDesc:  entry.StockDesc,
+			FinalCents: entry.FinalPriceCents,
+			PrevCents:  entry.PrevFinalCents,
+			DeltaCents: entry.FinalDeltaCents,
+		})
+	}
+	go func() {
+		if err := server.notifier.Notify(changes); err != nil {
+			server.logger.Printf("notify: dingtalk push failed (%d changes): %v", len(changes), err)
+			return
+		}
+		server.logger.Printf("notify: dingtalk push sent for %d price change(s)", len(changes))
+	}()
+}
+
+// setBufferedBody replaces a response body with an in-memory buffer and fixes up
+// the framing so the rewritten response is sent with a definite Content-Length
+// instead of chunked transfer-encoding.
+//
+// This matters because extraction strips the request's Accept-Encoding, which
+// makes Go's transport transparently gunzip the response and drop its
+// Content-Length (leaving ContentLength = -1). Re-sending such a response would
+// use chunked encoding, and some clients — notably the JD mini-program's HTTP
+// stack — fail to parse the chunked cart body and render an empty cart. Setting
+// an explicit Content-Length keeps the response well-formed for every client.
+func setBufferedBody(response *http.Response, body []byte) {
+	response.Body = io.NopCloser(bytes.NewReader(body))
+	response.ContentLength = int64(len(body))
+	response.TransferEncoding = nil
+	response.Header.Del("Transfer-Encoding")
+	response.Header.Set("Content-Length", strconv.Itoa(len(body)))
+}
+
 // extractFromResponse buffers the response body (so it can still be forwarded to
 // the client), decodes it if gzip-compressed, and feeds it to the SKU store
 // according to the rule's Extract target. Failures are logged and never affect
@@ -447,12 +499,12 @@ func (server *Server) extractFromResponse(rule *rules.Rule, response *http.Respo
 	raw, err := io.ReadAll(response.Body)
 	_ = response.Body.Close()
 	if err != nil {
-		response.Body = io.NopCloser(bytes.NewReader(nil))
+		setBufferedBody(response, nil)
 		server.logger.Printf("extract: read body failed for rule %q: %v", rule.Name, err)
 		return
 	}
 	// Restore the untouched body for the client.
-	response.Body = io.NopCloser(bytes.NewReader(raw))
+	setBufferedBody(response, raw)
 
 	payload := raw
 	// Auto-detect gzip: trust Content-Encoding first, then magic bytes.
@@ -485,6 +537,7 @@ func (server *Server) extractFromResponse(rule *rules.Rule, response *http.Respo
 		}
 		result := server.skuStore.Update(skus)
 		server.writeLatestSKUFile()
+		server.notifyPriceChanges(result.ChangedEntries)
 		server.appendCaptureJSONL("sku-events.jsonl", map[string]any{
 			"time":         time.Now(),
 			"rule":         rule.Name,

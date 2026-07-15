@@ -1,14 +1,12 @@
 @import "tailwindcss";
 
-/* ---- Design tokens ------------------------------------------------------- */
+/* Design tokens kept available for Tailwind utility classes (layout tweaks). */
 @theme {
   --color-ink: #18201f;
   --color-mint: #1f6f63;
-  --color-mint-strong: #185a50;
   --color-coral: #b8543d;
   --color-gold: #d69a3a;
   --color-violet: #6b5bd2;
-  --color-slate-accent: #64716c;
   --color-paper: #fbfdf7;
   --color-mist: #edf1e8;
 
@@ -16,355 +14,62 @@
   --font-mono: "Cascadia Code", "Consolas", monospace;
 }
 
-/* ---- Base ---------------------------------------------------------------- */
-@layer base {
-  html {
-    font-family: var(--font-sans);
-    color: var(--color-ink);
-    text-rendering: geometricPrecision;
-    font-synthesis: none;
-  }
-
-  body {
-    margin: 0;
-    min-width: 960px;
-    min-height: 680px;
-    background:
-      linear-gradient(135deg, rgba(29, 106, 97, 0.22), transparent 34%),
-      radial-gradient(circle at 88% 14%, rgba(222, 151, 73, 0.28), transparent 30%),
-      linear-gradient(180deg, #edf1e8 0%, #d8e0d8 100%);
-  }
-
-  button,
-  input,
-  select,
-  textarea {
-    font: inherit;
-  }
-
-  h1 {
-    @apply text-[32px] leading-[1.05] font-bold text-ink;
-  }
-
-  h2 {
-    @apply text-base font-bold text-ink;
-  }
+/*
+ * Only page-level styling lives here. All component styling is owned by Ant
+ * Design (via ConfigProvider theme tokens) — do NOT add global button/input/
+ * select/textarea rules, they would override antd controls.
+ */
+html,
+body {
+  margin: 0;
+  font-family: var(--font-sans);
 }
 
-/* ---- Form controls ------------------------------------------------------- */
-@layer components {
-  input,
-  select,
-  textarea {
-    @apply rounded-lg border border-ink/15 bg-white/70 text-ink outline-none transition-colors;
-  }
-
-  input:focus,
-  select:focus,
-  textarea:focus {
-    @apply border-mint/70;
-    box-shadow: 0 0 0 3px rgba(31, 111, 99, 0.14);
-  }
-
-  label {
-    @apply grid gap-[7px] text-[13px] font-bold text-ink/70;
-  }
-
-  label > input,
-  label > select {
-    @apply h-[38px] w-full px-3;
-  }
-
-  /* ---- Buttons (unified size) ------------------------------------------- */
-  button {
-    @apply inline-flex h-[38px] min-w-[104px] cursor-pointer items-center justify-center
-      rounded-lg border border-ink/20 bg-[#f8faf4] px-4 text-[13px] font-bold text-ink;
-    transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
-  }
-
-  button:hover:not(:disabled) {
-    @apply border-ink/40 bg-white;
-    transform: translateY(-1px);
-  }
-
-  button:disabled {
-    @apply cursor-not-allowed opacity-45;
-  }
-
-  button.primary {
-    @apply border-mint bg-mint text-[#f9fff8];
-  }
-
-  button.primary:hover:not(:disabled) {
-    @apply border-mint-strong bg-mint-strong;
-  }
-
-  button.primary.warm {
-    @apply border-coral bg-coral;
-  }
+body {
+  min-width: 960px;
+  min-height: 680px;
+  color: var(--color-ink);
+  background:
+    linear-gradient(135deg, rgba(29, 106, 97, 0.2), transparent 34%),
+    radial-gradient(circle at 88% 14%, rgba(222, 151, 73, 0.22), transparent 30%),
+    linear-gradient(180deg, #edf1e8 0%, #d8e0d8 100%);
+  background-attachment: fixed;
 }
 
-/* ---- Layout -------------------------------------------------------------- */
-@layer components {
-  .shell {
-    @apply p-7;
-  }
-
-  .topbar {
-    @apply mb-[22px] flex items-end justify-between gap-6;
-  }
-
-  .eyebrow {
-    @apply m-0 mb-1 text-xs font-extrabold uppercase text-coral;
-  }
-
-  .status-pill {
-    @apply inline-flex min-h-[38px] items-center gap-[9px] rounded-full border border-ink/15
-      bg-white/60 px-3.5 font-extrabold text-ink;
-  }
-
-  .status-pill > span {
-    @apply h-2.5 w-2.5 rounded-full;
-    background: #8a3d2d;
-  }
-
-  .status-pill.running > span {
-    @apply bg-mint;
-  }
-
-  .dashboard-grid {
-    @apply grid gap-4;
-    grid-template-columns: minmax(0, 1.2fr) minmax(300px, 0.8fr);
-  }
-
-  /* ---- Panels ----------------------------------------------------------- */
-  .panel {
-    @apply grid min-h-0 gap-4 rounded-2xl border border-ink/10 p-[18px];
-    background: rgba(251, 253, 247, 0.86);
-    box-shadow: 0 18px 45px rgba(32, 42, 38, 0.12);
-  }
-
-  .panel.wide {
-    grid-row: span 2;
-  }
-
-  .panel.full {
-    grid-column: 1 / -1;
-  }
-
-  .panel-heading {
-    @apply flex items-center gap-2.5;
-  }
-
-  .panel-heading > span {
-    @apply h-[26px] w-[11px] rounded bg-mint;
-  }
-
-  .panel[data-accent="gold"] .panel-heading > span {
-    @apply bg-gold;
-  }
-  .panel[data-accent="ink"] .panel-heading > span {
-    background: #24383b;
-  }
-  .panel[data-accent="coral"] .panel-heading > span {
-    @apply bg-coral;
-  }
-  .panel[data-accent="violet"] .panel-heading > span {
-    @apply bg-violet;
-  }
-  .panel[data-accent="mint"] .panel-heading > span {
-    @apply bg-mint;
-  }
-  .panel[data-accent="slate"] .panel-heading > span {
-    @apply bg-slate-accent;
-  }
-
-  /* ---- Fields ----------------------------------------------------------- */
-  .field-row {
-    @apply grid gap-3;
-  }
-
-  .field-row.two {
-    grid-template-columns: 180px minmax(0, 1fr);
-  }
-
-  .input-button {
-    @apply grid gap-2;
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .toggle-line {
-    @apply flex items-center gap-2.5 text-ink;
-  }
-
-  .toggle-line input {
-    @apply h-[18px] w-[18px];
-  }
-
-  .sku-filter-row {
-    @apply grid items-center gap-2.5;
-    grid-template-columns: auto auto auto 150px minmax(220px, 1fr);
-  }
-
-  .sku-filter-sort,
-  .sku-filter-search {
-    @apply h-9 px-3;
-  }
-
-  /* ---- Button rows ------------------------------------------------------ */
-  .button-row {
-    @apply flex flex-wrap gap-2.5;
-  }
-
-  .button-row.compact {
-    @apply justify-end;
-  }
-
-  /* ---- Metrics ---------------------------------------------------------- */
-  .metric-list {
-    @apply grid gap-2.5;
-  }
-
-  .metric {
-    @apply grid min-h-[35px] items-center gap-3 rounded-lg px-2.5 py-2;
-    grid-template-columns: 110px minmax(0, 1fr);
-    background: rgba(237, 241, 232, 0.82);
-  }
-
-  .metric.compact {
-    grid-template-columns: 120px minmax(0, 1fr);
-  }
-
-  .metric > span {
-    @apply text-xs font-extrabold text-ink/60;
-  }
-
-  .metric > strong {
-    @apply overflow-hidden text-ellipsis whitespace-nowrap text-[13px];
-  }
-
-  .metric.good > strong {
-    @apply text-mint;
-  }
-
-  .metric.warn > strong {
-    @apply text-coral;
-  }
-
-  /* ---- Toolbar ---------------------------------------------------------- */
-  .editor-toolbar {
-    @apply flex items-center justify-between gap-3;
-  }
-
-  .validation {
-    @apply overflow-hidden text-ellipsis whitespace-nowrap text-[13px] font-extrabold text-ink/80;
-  }
-
-  .automation-output {
-    @apply m-0 max-h-[210px] min-h-[128px] overflow-auto rounded-lg border border-ink/10 p-3
-      text-xs leading-relaxed;
-    background: #202a26;
-    color: #e9f0e8;
-    font-family: var(--font-mono);
-    white-space: pre-wrap;
-  }
-
-  .notice {
-    @apply rounded-md p-3 text-[13px] font-bold;
-    border-left: 4px solid var(--color-gold);
-    background: rgba(214, 154, 58, 0.14);
-    color: #4b3820;
-  }
-
-  .hint {
-    @apply m-0 text-xs leading-normal text-ink/60;
-  }
-
-  /* ---- Log / SKU cards -------------------------------------------------- */
-  .log-list {
-    @apply grid max-h-[340px] gap-2 overflow-y-auto p-1;
-  }
-
-  .log-card {
-    @apply grid gap-1.5 rounded-lg border border-ink/10 px-3 py-2.5;
-    background: rgba(255, 255, 255, 0.65);
-  }
-
-  .log-card-top {
-    @apply flex items-center gap-2;
-  }
-
-  .log-tag {
-    @apply rounded-full px-2.5 py-0.5 text-[11px] font-extrabold tracking-wide;
-  }
-
-  .log-tag-method {
-    background: rgba(31, 111, 99, 0.14);
-    @apply text-mint;
-  }
-
-  .log-tag-action {
-    @apply uppercase;
-    background: rgba(214, 154, 58, 0.18);
-    color: #8a5a17;
-  }
-
-  .log-tag-status {
-    background: rgba(24, 32, 31, 0.08);
-    @apply text-ink;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .log-time {
-    @apply ml-auto text-[11px] text-ink/50;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .log-card-bottom {
-    @apply flex items-baseline gap-2.5 text-xs;
-  }
-
-  .log-rule {
-    @apply flex-none font-bold text-ink/80;
-  }
-
-  .log-url {
-    @apply overflow-hidden text-ellipsis whitespace-nowrap text-[11px] text-ink/55;
-    font-family: var(--font-mono);
-  }
-
-  .log-empty {
-    @apply p-3.5 text-center text-xs text-ink/55;
-  }
+/* ---- App shell (antd Layout sits on top of the gradient) ----------------- */
+.app-shell {
+  min-height: 100vh;
+  padding: 22px 28px 32px;
+  background: transparent;
 }
 
-/* ---- Responsive ---------------------------------------------------------- */
+.app-header {
+  height: auto;
+  line-height: 1.2;
+  padding: 0 0 18px;
+  background: transparent;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.eyebrow {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-coral);
+}
+
 @media (max-width: 980px) {
   body {
     min-width: 0;
   }
 
-  .shell {
+  .app-shell {
     padding: 18px;
-  }
-
-  .topbar,
-  .dashboard-grid,
-  .field-row.two {
-    display: grid;
-    grid-template-columns: 1fr;
-  }
-
-  h1 {
-    font-size: 28px;
-  }
-
-  .panel.wide {
-    grid-row: auto;
-  }
-
-  .sku-filter-row {
-    grid-template-columns: 1fr;
-    justify-items: start;
   }
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	coreapp "mini-proxy/internal/app"
+	"mini-proxy/internal/notify"
 	"mini-proxy/internal/proxy"
 	"mini-proxy/internal/rules"
 	"mini-proxy/internal/sku"
@@ -174,4 +175,16 @@ func (app *DesktopApp) GetSKUList() sku.Snapshot {
 func (app *DesktopApp) ResetSKUList() sku.Snapshot {
 	app.service.ResetSKUList()
 	return app.service.GetSKUList()
+}
+
+func (app *DesktopApp) GetNotifyConfig() (notify.Config, error) {
+	return app.service.GetNotifyConfig()
+}
+
+func (app *DesktopApp) SaveNotifyConfig(config notify.Config) error {
+	return app.service.SaveNotifyConfig(config)
+}
+
+func (app *DesktopApp) TestNotify(config notify.Config) error {
+	return app.service.TestNotify(config)
 }

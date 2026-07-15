@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"mini-proxy/internal/cert"
+	"mini-proxy/internal/notify"
 	"mini-proxy/internal/proxy"
 	"mini-proxy/internal/rules"
 	"mini-proxy/internal/sku"
@@ -167,6 +168,49 @@ func (service *Service) ResetSKUList() {
 	}
 }
 
+// GetNotifyConfig returns the persisted DingTalk notification + discount config.
+// A missing config file yields sensible disabled defaults.
+func (service *Service) GetNotifyConfig() (notify.Config, error) {
+	config, err := LoadNotifyConfig(service.paths.NotifyConfigPath)
+	if err != nil {
+		service.setLastError(err)
+		return config, err
+	}
+	return config, nil
+}
+
+// SaveNotifyConfig validates and persists the notification config. The running
+// proxy picks up the change on its next start (the notifier is created when the
+// proxy starts, mirroring how rules are loaded).
+func (service *Service) SaveNotifyConfig(config notify.Config) error {
+	if _, err := notify.New(config, service.logger); err != nil {
+		service.setLastError(err)
+		return err
+	}
+	if err := SaveNotifyConfig(service.paths.NotifyConfigPath, config); err != nil {
+		service.setLastError(err)
+		return err
+	}
+	service.setLastError(nil)
+	return nil
+}
+
+// TestNotify sends a sample DingTalk message using the provided config so users
+// can verify the webhook URL, signing secret, and template before saving.
+func (service *Service) TestNotify(config notify.Config) error {
+	notifier, err := notify.New(config, service.logger)
+	if err != nil {
+		service.setLastError(err)
+		return err
+	}
+	if err := notifier.SendTest(); err != nil {
+		service.setLastError(err)
+		return err
+	}
+	service.setLastError(nil)
+	return nil
+}
+
 func (service *Service) StartProxy(options ServeOptions) (Status, error) {
 	service.mu.Lock()
 	if service.proxyServer != nil {
@@ -203,6 +247,7 @@ func (service *Service) StartProxy(options ServeOptions) (Status, error) {
 		Certs:      service.certManager,
 		Logger:     service.logger,
 		SKUStore:   service.skuStore,
+		Notifier:   loadNotifier(service.paths.NotifyConfigPath, service.logger),
 		CaptureDir: filepath.Join(service.paths.LogDir, "intercepts"),
 	})
 	listener, err := net.Listen("tcp", proxyServer.Addr())

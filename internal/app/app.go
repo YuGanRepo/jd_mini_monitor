@@ -18,10 +18,11 @@ import (
 )
 
 type Paths struct {
-	BaseDir        string
-	CertDir        string
-	LogDir         string
-	ProxyStatePath string
+	BaseDir          string
+	CertDir          string
+	LogDir           string
+	ProxyStatePath   string
+	NotifyConfigPath string
 }
 
 type ServeOptions struct {
@@ -38,10 +39,11 @@ func DefaultPaths() (Paths, error) {
 	}
 	baseDir := filepath.Join(base, "MiniProxy")
 	paths := Paths{
-		BaseDir:        baseDir,
-		CertDir:        filepath.Join(baseDir, "certs"),
-		LogDir:         filepath.Join(baseDir, "logs"),
-		ProxyStatePath: filepath.Join(baseDir, "previous-proxy.json"),
+		BaseDir:          baseDir,
+		CertDir:          filepath.Join(baseDir, "certs"),
+		LogDir:           filepath.Join(baseDir, "logs"),
+		ProxyStatePath:   filepath.Join(baseDir, "previous-proxy.json"),
+		NotifyConfigPath: filepath.Join(baseDir, "notify.json"),
 	}
 	for _, dir := range []string{paths.BaseDir, paths.CertDir, paths.LogDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -82,11 +84,14 @@ func Serve(options ServeOptions) error {
 		return err
 	}
 
+	notifier := loadNotifier(paths.NotifyConfigPath, logger)
+
 	server := proxy.New(proxy.Config{
 		Addr:       options.Addr,
 		Rules:      ruleSet,
 		Certs:      certManager,
 		Logger:     logger,
+		Notifier:   notifier,
 		CaptureDir: filepath.Join(paths.LogDir, "intercepts"),
 	})
 

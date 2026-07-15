@@ -9,7 +9,9 @@
     "vite": "latest",
     "typescript": "latest",
     "react": "latest",
-    "react-dom": "latest"
+    "react-dom": "latest",
+    "antd": "^5",
+    "@ant-design/icons": "^5"
   },
   "devDependencies": {
     "@tailwindcss/vite": "latest",

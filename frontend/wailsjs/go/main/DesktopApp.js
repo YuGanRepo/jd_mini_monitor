@@ -14,6 +14,10 @@ export function GetJDAutomationStatus() {
   return window['go']['main']['DesktopApp']['GetJDAutomationStatus']();
 }
 
+export function GetNotifyConfig() {
+  return window['go']['main']['DesktopApp']['GetNotifyConfig']();
+}
+
 export function GetRequestLogs() {
   return window['go']['main']['DesktopApp']['GetRequestLogs']();
 }
@@ -46,6 +50,10 @@ export function RunAutomation(arg1) {
   return window['go']['main']['DesktopApp']['RunAutomation'](arg1);
 }
 
+export function SaveNotifyConfig(arg1) {
+  return window['go']['main']['DesktopApp']['SaveNotifyConfig'](arg1);
+}
+
 export function SelectJSONFile(arg1) {
   return window['go']['main']['DesktopApp']['SelectJSONFile'](arg1);
 }
@@ -64,6 +72,10 @@ export function StopJDAutomation() {
 
 export function StopProxy() {
   return window['go']['main']['DesktopApp']['StopProxy']();
+}
+
+export function TestNotify(arg1) {
+  return window['go']['main']['DesktopApp']['TestNotify'](arg1);
 }
 
 export function UninstallCert() {

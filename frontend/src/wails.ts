@@ -87,6 +87,20 @@ export type SKUSnapshot = {
   totalSku: number;
 };
 
+export type NotifyDingTalkConfig = {
+  webhookUrl: string;
+  secret?: string;
+};
+
+export type NotifyConfig = {
+  enabled: boolean;
+  dingtalk: NotifyDingTalkConfig;
+  discountRate: number;
+  format: string;
+  title: string;
+  template: string;
+};
+
 type DesktopApi = {
   GetDefaults(): Promise<DesktopDefaults>;
   GetStatus(): Promise<Status>;
@@ -107,6 +121,9 @@ type DesktopApi = {
   GetRequestLogs(): Promise<RequestLogEntry[]>;
   GetSKUList(): Promise<SKUSnapshot>;
   ResetSKUList(): Promise<SKUSnapshot>;
+  GetNotifyConfig(): Promise<NotifyConfig>;
+  SaveNotifyConfig(config: NotifyConfig): Promise<void>;
+  TestNotify(config: NotifyConfig): Promise<void>;
 };
 
 declare global {
