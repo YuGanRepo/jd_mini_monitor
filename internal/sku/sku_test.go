@@ -274,6 +274,23 @@ func TestStoreApplyQuoteRejectsStalePrice(t *testing.T) {
 	}
 }
 
+func TestQuoteNotificationClaimSurvivesTemporaryEmptySnapshot(t *testing.T) {
+	store := NewStore()
+	item := SKU{ItemID: "a", Name: "A", FinalPriceCents: 1000}
+	store.Update([]SKU{item})
+	if !store.ClaimQuoteNotification("a", 1000, "quote-key") {
+		t.Fatal("initial quote notification claim failed")
+	}
+	store.Update(nil)
+	store.Update([]SKU{item})
+	if store.ClaimQuoteNotification("a", 1000, "quote-key") {
+		t.Fatal("duplicate quote notification claim succeeded after empty snapshot")
+	}
+	if store.Snapshot().Entries[0].QuoteNotifiedKey != "quote-key" {
+		t.Fatal("quote notification key was not restored to the returning SKU")
+	}
+}
+
 func TestParsePluginCartPayload(t *testing.T) {
 	payload := `{
   "resultData": {"cartInfo": {"vendors": [{

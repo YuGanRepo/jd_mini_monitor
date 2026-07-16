@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -319,5 +320,38 @@ func TestNewEnrichesRestoredSKUSnapshot(t *testing.T) {
 			t.Fatalf("restored quote enrichment timed out: %+v", entry)
 		case <-time.After(10 * time.Millisecond):
 		}
+	}
+}
+
+func TestQuoteQualifiedSKUNotifiesOnceWithoutCartChanges(t *testing.T) {
+	var calls atomic.Int32
+	webhook := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		calls.Add(1)
+		_, _ = writer.Write([]byte(`{"errcode":0,"errmsg":"ok"}`))
+	}))
+	defer webhook.Close()
+
+	notifier, err := notify.New(notify.Config{
+		Enabled: true, QuoteDiffFilterEnabled: true, QuoteDiffThreshold: 0, DiscountRate: 1,
+		DingTalk: notify.DingTalkConfig{Enabled: notify.Bool(true), WebhookURL: webhook.URL},
+	}, nil)
+	if err != nil {
+		t.Fatalf("notify.New() error = %v", err)
+	}
+	store := sku.NewStore()
+	store.Update([]sku.SKU{{ItemID: "high", Name: "单瓶", FinalPriceCents: 1000}})
+	server := New(Config{SKUStore: store, QuoteMatcher: fakeQuoteMatcher{}, Notifier: notifier})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for calls.Load() < 1 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("quote notification calls = %d, want 1", calls.Load())
+	}
+	server.enrichSKUQuotes(store.Snapshot().Entries)
+	time.Sleep(100 * time.Millisecond)
+	if calls.Load() != 1 {
+		t.Fatalf("duplicate quote notification calls = %d, want 1", calls.Load())
 	}
 }

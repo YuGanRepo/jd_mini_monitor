@@ -604,7 +604,7 @@ export default function Dashboard({ licenseState, licenseBusy, onDeactivateLicen
                 <Button type="primary" loading={busy} onClick={() => void saveNotifyConfig()}>保存配置</Button>
                 <Button loading={busy} onClick={() => void testNotify()}>测试所有已启用渠道</Button>
               </Space>
-              <Alert style={{ marginTop: 12 }} type="info" showIcon message="配置保存后立即生效。通知按价格、库存、优惠、赠品分类，每批最多 3 个 SKU；库存数量变化必须严格大于阈值。未匹配报价的商品不受差价过滤影响。" />
+              <Alert style={{ marginTop: 12 }} type="info" showIcon message="配置保存后立即生效。启用报价差价过滤后，即使购物车字段未变化，差价大于阈值的 SKU 也会通知一次；同一到手价和报价不会重复发送。通知标题需包含钉钉机器人设置的安全关键词。" />
             </Card>
           </Col>
 

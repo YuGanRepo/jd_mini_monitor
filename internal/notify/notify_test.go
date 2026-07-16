@@ -175,6 +175,60 @@ func TestNotifyReportsErrcode(t *testing.T) {
 	}
 }
 
+func TestNotifyReportsSendsQuoteOnlyReportWithTitleInBody(t *testing.T) {
+	var received map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_ = json.NewDecoder(request.Body).Decode(&received)
+		_, _ = writer.Write([]byte(`{"errcode":0,"errmsg":"ok"}`))
+	}))
+	defer server.Close()
+
+	notifier, err := New(Config{
+		Enabled:  true,
+		Format:   FormatMarkdown,
+		Title:    "京东小程序通知",
+		DingTalk: DingTalkConfig{Enabled: Bool(true), WebhookURL: server.URL},
+	}, nil)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	report := Report{
+		ItemID: "1", Name: "商品", FinalPriceCents: 1000,
+		HasQuote: true, QuoteTriggered: true, QuoteName: "系统行情", QuoteSpec: "单瓶",
+		QuotePricePerUnit: 20, QuoteTotal: 20, QuoteCost: 9, QuoteDiff: 11,
+	}
+	if err := notifier.NotifyReports([]Report{report}); err != nil {
+		t.Fatalf("NotifyReports() error = %v", err)
+	}
+	markdown, _ := received["markdown"].(map[string]any)
+	body, _ := markdown["text"].(string)
+	if !strings.Contains(body, "京东小程序通知") || !strings.Contains(body, "报价对比") || !strings.Contains(body, "差价：+11.00") {
+		t.Fatalf("quote-only markdown body missing title or quote details: %s", body)
+	}
+}
+
+func TestNotifyReportsDoesNotBypassDisabledCategoryForAttachedQuote(t *testing.T) {
+	notifier, err := New(Config{Categories: &CategoryConfig{}}, nil)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	report := Report{
+		ItemID: "1", Name: "商品", HasQuote: true,
+		Changes: []FieldChange{{Category: "price", Field: "到手价"}},
+	}
+	report.Changes = notifier.filterChanges(report.Changes)
+	if len(report.Changes) != 0 || report.QuoteTriggered {
+		t.Fatalf("test precondition failed: %+v", report)
+	}
+	filtered := make([]Report, 0, 1)
+	if len(report.Changes) > 0 || report.QuoteTriggered {
+		filtered = append(filtered, report)
+	}
+	if len(filtered) != 0 {
+		t.Fatalf("attached quote bypassed disabled category: %+v", filtered)
+	}
+}
+
 func TestReportFilteringMatchesPluginSemantics(t *testing.T) {
 	notifier, err := New(Config{
 		Categories:           &CategoryConfig{Price: true, Stock: true, Promo: false, Gift: false},

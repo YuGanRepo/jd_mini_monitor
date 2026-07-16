@@ -593,6 +593,8 @@ func (server *Server) filterReportsByQuote(notifier *notify.Notifier, reports []
 		report.QuoteName = difference.QuoteName
 		report.QuoteSpec = difference.Spec
 		report.QuotePricePerUnit = difference.PricePerUnit
+		report.QuoteTotal = difference.QuoteTotal
+		report.QuoteCost = difference.CostTotal
 		report.QuoteDiff = difference.Amount
 		report.ProfitRatio = difference.ProfitRatio
 		if !enabled || difference.Amount > threshold {
@@ -613,8 +615,12 @@ func (server *Server) enrichSKUQuotes(entries []sku.Entry) {
 	notifier := server.notifier
 	server.notifierMu.RUnlock()
 	discountRate := 1.0
+	quoteNotifyEnabled := false
+	quoteThreshold := 0.0
 	if notifier != nil {
 		discountRate = notifier.DiscountRate()
+		quoteNotifyEnabled, quoteThreshold = notifier.QuoteFilter()
+		quoteNotifyEnabled = quoteNotifyEnabled && notifier.Enabled()
 	}
 
 	server.quoteRunMu.Lock()
@@ -625,6 +631,9 @@ func (server *Server) enrichSKUQuotes(entries []sku.Entry) {
 	go func() {
 		semaphore := make(chan struct{}, 6)
 		var wait sync.WaitGroup
+		var reportMu sync.Mutex
+		quoteReports := make([]notify.Report, 0)
+		claimedKeys := make(map[string]string)
 		for _, entry := range entries {
 			entry := entry
 			wait.Add(1)
@@ -661,6 +670,23 @@ func (server *Server) enrichSKUQuotes(entries []sku.Entry) {
 				server.quoteRunMu.Unlock()
 				if current {
 					server.skuStore.ApplyQuote(entry.ItemID, entry.FinalPriceCents, result)
+					if quoteNotifyEnabled && len(entry.Changes) == 0 && result.Status == sku.QuoteStatusMatched && result.Diff > quoteThreshold {
+						key := fmt.Sprintf("%d|%.4f|%.4f|%.4f|%s", entry.FinalPriceCents, result.Total, result.Cost, result.Diff, result.Name)
+						if server.skuStore.ClaimQuoteNotification(entry.ItemID, entry.FinalPriceCents, key) {
+							reportMu.Lock()
+							claimedKeys[entry.ItemID] = key
+							quoteReports = append(quoteReports, notify.Report{
+								ItemID: entry.ItemID, Name: entry.Name, VendorName: entry.VendorName, Num: entry.Num,
+								StockDesc: entry.StockDesc, RemainNum: entry.RemainNum,
+								PagePriceCents: entry.PagePriceCents, FinalPriceCents: entry.FinalPriceCents,
+								ProductURL: entry.ProductURL, CheckoutURL: entry.CheckoutURL,
+								HasQuote: true, QuoteTriggered: true, QuoteName: result.Name, QuoteSpec: result.Spec,
+								QuotePricePerUnit: result.Price, QuoteTotal: result.Total, QuoteCost: result.Cost,
+								QuoteDiff: result.Diff, ProfitRatio: result.ProfitRate,
+							})
+							reportMu.Unlock()
+						}
+					}
 				}
 			}()
 		}
@@ -669,6 +695,16 @@ func (server *Server) enrichSKUQuotes(entries []sku.Entry) {
 		current := server.quoteRunID == runID
 		server.quoteRunMu.Unlock()
 		if current {
+			if len(quoteReports) > 0 {
+				if err := notifier.NotifyReports(quoteReports); err != nil {
+					for itemID, key := range claimedKeys {
+						server.skuStore.ReleaseQuoteNotification(itemID, key)
+					}
+					server.logger.Printf("notify: quote push failed (%d reports): %v", len(quoteReports), err)
+				} else {
+					server.logger.Printf("notify: quote push sent for %d SKU(s)", len(quoteReports))
+				}
+			}
 			server.skuPersistMu.Lock()
 			server.writeLatestSKUFile()
 			server.skuPersistMu.Unlock()

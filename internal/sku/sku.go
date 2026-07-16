@@ -496,26 +496,27 @@ func parseIntegerCents(value string) int64 {
 // interceptions.
 type Entry struct {
 	SKU
-	FirstSeen       time.Time `json:"firstSeen"`
-	LastUpdated     time.Time `json:"lastUpdated"`
-	UpdateCount     int       `json:"updateCount"`
-	PrevFinalCents  int64     `json:"prevFinalCents"`  // final price before the most recent change
-	FinalDeltaCents int64     `json:"finalDeltaCents"` // FinalPriceCents - PrevFinalCents at last change (persists)
-	PriceChanged    bool      `json:"priceChanged"`    // whether the final price changed on the latest capture
-	StockChanged    bool      `json:"stockChanged"`
-	PromoChanged    bool      `json:"promoChanged"`
-	GiftChanged     bool      `json:"giftChanged"`
-	Changes         []Change  `json:"changes,omitempty"`
-	QuoteStatus     string    `json:"quoteStatus,omitempty"`
-	QuoteName       string    `json:"quoteName,omitempty"`
-	QuoteSpec       string    `json:"quoteSpec,omitempty"`
-	QuotePrice      float64   `json:"quotePrice,omitempty"`
-	QuoteTotal      float64   `json:"quoteTotal,omitempty"`
-	QuoteCost       float64   `json:"quoteCost,omitempty"`
-	QuoteDiff       float64   `json:"quoteDiff,omitempty"`
-	QuoteProfitRate float64   `json:"quoteProfitRate,omitempty"`
-	QuoteError      string    `json:"quoteError,omitempty"`
-	QuoteUpdatedAt  time.Time `json:"quoteUpdatedAt,omitempty"`
+	FirstSeen        time.Time `json:"firstSeen"`
+	LastUpdated      time.Time `json:"lastUpdated"`
+	UpdateCount      int       `json:"updateCount"`
+	PrevFinalCents   int64     `json:"prevFinalCents"`  // final price before the most recent change
+	FinalDeltaCents  int64     `json:"finalDeltaCents"` // FinalPriceCents - PrevFinalCents at last change (persists)
+	PriceChanged     bool      `json:"priceChanged"`    // whether the final price changed on the latest capture
+	StockChanged     bool      `json:"stockChanged"`
+	PromoChanged     bool      `json:"promoChanged"`
+	GiftChanged      bool      `json:"giftChanged"`
+	Changes          []Change  `json:"changes,omitempty"`
+	QuoteStatus      string    `json:"quoteStatus,omitempty"`
+	QuoteName        string    `json:"quoteName,omitempty"`
+	QuoteSpec        string    `json:"quoteSpec,omitempty"`
+	QuotePrice       float64   `json:"quotePrice,omitempty"`
+	QuoteTotal       float64   `json:"quoteTotal,omitempty"`
+	QuoteCost        float64   `json:"quoteCost,omitempty"`
+	QuoteDiff        float64   `json:"quoteDiff,omitempty"`
+	QuoteProfitRate  float64   `json:"quoteProfitRate,omitempty"`
+	QuoteError       string    `json:"quoteError,omitempty"`
+	QuoteUpdatedAt   time.Time `json:"quoteUpdatedAt,omitempty"`
+	QuoteNotifiedKey string    `json:"quoteNotifiedKey,omitempty"`
 }
 
 const (
@@ -576,15 +577,16 @@ type Snapshot struct {
 // Store keeps the latest known state for every SKU seen so far, keyed by item id,
 // and is safe for concurrent use.
 type Store struct {
-	mu         sync.Mutex
-	entries    map[string]*Entry
-	parseCount int
-	updatedAt  time.Time
+	mu            sync.Mutex
+	entries       map[string]*Entry
+	quoteNotified map[string]string
+	parseCount    int
+	updatedAt     time.Time
 }
 
 // NewStore returns an empty store ready for use.
 func NewStore() *Store {
-	return &Store{entries: make(map[string]*Entry)}
+	return &Store{entries: make(map[string]*Entry), quoteNotified: make(map[string]string)}
 }
 
 // Update replaces the current cart snapshot, preserving metadata for items that
@@ -604,26 +606,28 @@ func (store *Store) Update(skus []SKU) UpdateResult {
 		existing, ok := store.entries[item.ItemID]
 		if !ok {
 			nextEntries[item.ItemID] = &Entry{
-				SKU:            item,
-				FirstSeen:      now,
-				LastUpdated:    now,
-				UpdateCount:    1,
-				PrevFinalCents: item.FinalPriceCents,
-				QuoteStatus:    QuoteStatusLoading,
+				SKU:              item,
+				FirstSeen:        now,
+				LastUpdated:      now,
+				UpdateCount:      1,
+				PrevFinalCents:   item.FinalPriceCents,
+				QuoteStatus:      QuoteStatusLoading,
+				QuoteNotifiedKey: store.quoteNotified[item.ItemID],
 			}
 			continue
 		}
 
 		changes := compareSKU(existing.SKU, item)
 		entry := &Entry{
-			SKU:             item,
-			FirstSeen:       existing.FirstSeen,
-			LastUpdated:     now,
-			UpdateCount:     existing.UpdateCount + 1,
-			PrevFinalCents:  existing.FinalPriceCents,
-			FinalDeltaCents: item.FinalPriceCents - existing.FinalPriceCents,
-			Changes:         changes,
-			QuoteStatus:     QuoteStatusLoading,
+			SKU:              item,
+			FirstSeen:        existing.FirstSeen,
+			LastUpdated:      now,
+			UpdateCount:      existing.UpdateCount + 1,
+			PrevFinalCents:   existing.FinalPriceCents,
+			FinalDeltaCents:  item.FinalPriceCents - existing.FinalPriceCents,
+			Changes:          changes,
+			QuoteStatus:      QuoteStatusLoading,
+			QuoteNotifiedKey: existing.QuoteNotifiedKey,
 		}
 		for _, change := range changes {
 			switch change.Category {
@@ -668,6 +672,34 @@ func (store *Store) ApplyQuote(itemID string, finalPriceCents int64, result Quot
 	entry.QuoteError = result.Error
 	entry.QuoteUpdatedAt = time.Now()
 	return true
+}
+
+// ClaimQuoteNotification atomically suppresses duplicate quote notifications.
+// ReleaseQuoteNotification removes a failed claim so a later cycle can retry.
+func (store *Store) ClaimQuoteNotification(itemID string, finalPriceCents int64, key string) bool {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	entry, ok := store.entries[itemID]
+	if !ok || entry.FinalPriceCents != finalPriceCents || key == "" || entry.QuoteNotifiedKey == key {
+		return false
+	}
+	if store.quoteNotified[itemID] == key {
+		return false
+	}
+	entry.QuoteNotifiedKey = key
+	store.quoteNotified[itemID] = key
+	return true
+}
+
+func (store *Store) ReleaseQuoteNotification(itemID, key string) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if entry, ok := store.entries[itemID]; ok && entry.QuoteNotifiedKey == key {
+		entry.QuoteNotifiedKey = ""
+	}
+	if store.quoteNotified[itemID] == key {
+		delete(store.quoteNotified, itemID)
+	}
 }
 
 func compareSKU(oldSKU, newSKU SKU) []Change {
@@ -791,6 +823,7 @@ func (store *Store) LoadSnapshot(snapshot Snapshot) {
 	defer store.mu.Unlock()
 
 	store.entries = make(map[string]*Entry, len(snapshot.Entries))
+	store.quoteNotified = make(map[string]string, len(snapshot.Entries))
 	for index := range snapshot.Entries {
 		entry := snapshot.Entries[index]
 		if strings.TrimSpace(entry.ItemID) == "" {
@@ -798,6 +831,9 @@ func (store *Store) LoadSnapshot(snapshot Snapshot) {
 		}
 		copyEntry := entry
 		store.entries[copyEntry.ItemID] = &copyEntry
+		if copyEntry.QuoteNotifiedKey != "" {
+			store.quoteNotified[copyEntry.ItemID] = copyEntry.QuoteNotifiedKey
+		}
 	}
 	store.parseCount = snapshot.ParseCount
 	store.updatedAt = snapshot.UpdatedAt
@@ -808,6 +844,7 @@ func (store *Store) Reset() {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	store.entries = make(map[string]*Entry)
+	store.quoteNotified = make(map[string]string)
 	store.parseCount = 0
 	store.updatedAt = time.Time{}
 }

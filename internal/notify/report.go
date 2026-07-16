@@ -40,9 +40,12 @@ type Report struct {
 	CheckoutURL       string
 	Changes           []FieldChange
 	HasQuote          bool
+	QuoteTriggered    bool
 	QuoteName         string
 	QuoteSpec         string
 	QuotePricePerUnit float64
+	QuoteTotal        float64
+	QuoteCost         float64
 	QuoteDiff         float64
 	ProfitRatio       float64
 }
@@ -54,7 +57,7 @@ func (n *Notifier) NotifyReports(reports []Report) error {
 	filtered := make([]Report, 0, len(reports))
 	for _, report := range reports {
 		report.Changes = n.filterChanges(report.Changes)
-		if len(report.Changes) > 0 {
+		if len(report.Changes) > 0 || report.QuoteTriggered {
 			filtered = append(filtered, report)
 		}
 	}
@@ -132,6 +135,15 @@ func (n *Notifier) buildReportBatch(reports []Report) string {
 		separator = "\n\n---\n\n"
 	}
 	body := strings.Join(sections, separator)
+	title := strings.TrimSpace(n.config.Title)
+	if title == "" {
+		title = "京东购物车价格变动"
+	}
+	if n.config.Format == FormatMarkdown {
+		body = "## " + title + "\n\n" + body
+	} else {
+		body = "【" + title + "】\n" + body
+	}
 	if n.config.DeviceTag != "" {
 		if n.config.Format == FormatMarkdown {
 			body += "\n\n---\n识别码：`" + n.config.DeviceTag + "`"
@@ -202,7 +214,10 @@ func (n *Notifier) buildReport(report Report) string {
 		if report.QuoteDiff >= 0 {
 			diffSign = "+"
 		}
-		quoteLine := fmt.Sprintf("报价对比：%s %s = ¥%.2f   差价：%s%.2f", firstText(report.QuoteName, "服务端报价"), report.QuoteSpec, report.QuotePricePerUnit, diffSign, report.QuoteDiff)
+		quoteLine := fmt.Sprintf("报价对比：%s %s 总价 ¥%.2f   折后成本 ¥%.2f   差价：%s%.2f", firstText(report.QuoteName, "服务端报价"), report.QuoteSpec, report.QuoteTotal, report.QuoteCost, diffSign, report.QuoteDiff)
+		if report.QuotePricePerUnit > 0 {
+			quoteLine += fmt.Sprintf("   单价 ¥%.2f", report.QuotePricePerUnit)
+		}
 		if report.QuoteDiff > 0 {
 			quoteLine += fmt.Sprintf("（%.1f%%）", report.ProfitRatio*100)
 		}

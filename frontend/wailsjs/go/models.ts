@@ -394,6 +394,7 @@ export namespace sku {
 	    quoteError?: string;
 	    // Go type: time
 	    quoteUpdatedAt?: any;
+	    quoteNotifiedKey?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Entry(source);
@@ -445,6 +446,7 @@ export namespace sku {
 	        this.quoteProfitRate = source["quoteProfitRate"];
 	        this.quoteError = source["quoteError"];
 	        this.quoteUpdatedAt = this.convertValues(source["quoteUpdatedAt"], null);
+	        this.quoteNotifiedKey = source["quoteNotifiedKey"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
