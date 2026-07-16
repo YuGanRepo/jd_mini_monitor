@@ -10,6 +10,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	coreapp "mini-proxy/internal/app"
+	"mini-proxy/internal/license"
 	"mini-proxy/internal/notify"
 	"mini-proxy/internal/proxy"
 	"mini-proxy/internal/rules"
@@ -187,4 +188,32 @@ func (app *DesktopApp) SaveNotifyConfig(config notify.Config) error {
 
 func (app *DesktopApp) TestNotify(config notify.Config) error {
 	return app.service.TestNotify(config)
+}
+
+func (app *DesktopApp) ActivateLicense(licenseKey string) error {
+	return app.service.ActivateLicense(licenseKey)
+}
+
+func (app *DesktopApp) VerifyLicense() (bool, error) {
+	return app.service.VerifyLicense()
+}
+
+func (app *DesktopApp) DeactivateLicense() error {
+	return app.service.DeactivateLicense()
+}
+
+func (app *DesktopApp) GetLicenseState() license.State {
+	return app.service.GetLicenseState()
+}
+
+func (app *DesktopApp) GetDeviceID() string {
+	return app.service.GetDeviceID()
+}
+
+func (app *DesktopApp) GetLicenseServerURL() string {
+	return app.service.GetLicenseServerURL()
+}
+
+func (app *DesktopApp) SetLicenseServerURL(url string) error {
+	return app.service.SetLicenseServerURL(url)
 }

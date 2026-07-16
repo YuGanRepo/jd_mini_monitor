@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"mini-proxy/internal/cert"
+	"mini-proxy/internal/license"
 	"mini-proxy/internal/notify"
 	"mini-proxy/internal/proxy"
 	"mini-proxy/internal/rules"
@@ -32,6 +35,7 @@ type Status struct {
 	BaseDir           string `json:"baseDir"`
 	LogDir            string `json:"logDir"`
 	ProxyStatePath    string `json:"proxyStatePath"`
+	Licensed          bool   `json:"licensed"`
 	LastError         string `json:"lastError"`
 }
 
@@ -50,6 +54,10 @@ type Service struct {
 	certManager       *cert.Manager
 	proxyServer       *proxy.Server
 	skuStore          *sku.Store
+	licenseStore      *license.Store
+	licenseClient     *license.Client
+	licenseServerURL  string
+	deviceID          string
 	rulesPath         string
 	addr              string
 	systemProxyActive bool
@@ -78,19 +86,27 @@ func NewService() (*Service, error) {
 		logger.Printf("load sku snapshot failed: %v", err)
 	}
 
+	licenseStore := license.NewStore(paths.LicenseStatePath)
+	deviceID := ensureDeviceID(paths, logger)
+	licenseServerURL := loadLicenseServerURL(paths.LicenseServerPath)
+
 	// If a previous run enabled the Windows system proxy and then exited
 	// uncleanly (crash / force-kill), the system proxy is left pointing at our
 	// now-dead listener, which breaks all internet access. Recover it here.
 	recoverDanglingSystemProxy(paths, logger)
 
 	return &Service{
-		paths:         paths,
-		logger:        logger,
-		cleanupLogger: cleanup,
-		certManager:   certManager,
-		skuStore:      skuStore,
-		addr:          "127.0.0.1:8899",
-		rulesPath:     "configs/jd.rules.json",
+		paths:            paths,
+		logger:           logger,
+		cleanupLogger:    cleanup,
+		certManager:      certManager,
+		skuStore:         skuStore,
+		licenseStore:     licenseStore,
+		licenseClient:    license.NewClient(licenseServerURL),
+		licenseServerURL: licenseServerURL,
+		deviceID:         deviceID,
+		addr:             "127.0.0.1:8899",
+		rulesPath:        "configs/jd.rules.json",
 	}, nil
 }
 
@@ -117,6 +133,7 @@ func (service *Service) Status() Status {
 	service.mu.Lock()
 	defer service.mu.Unlock()
 
+	licensed, _ := service.checkLicense()
 	return Status{
 		ProxyRunning:      service.proxyServer != nil,
 		Addr:              service.addr,
@@ -128,6 +145,7 @@ func (service *Service) Status() Status {
 		BaseDir:           service.paths.BaseDir,
 		LogDir:            service.paths.LogDir,
 		ProxyStatePath:    service.paths.ProxyStatePath,
+		Licensed:          licensed,
 		LastError:         service.lastError,
 	}
 }
@@ -166,6 +184,152 @@ func (service *Service) ResetSKUList() {
 	if store != nil {
 		store.Reset()
 	}
+}
+
+// checkLicense is the offline gate used before starting the proxy. It trusts a
+// cached signed token (validated against the embedded public key, anchored on
+// the server's authoritative time) — no network call in the hot path. A fresh
+// online verify is done separately by VerifyLicense (called by the UI on load).
+func (service *Service) checkLicense() (bool, error) {
+	store := service.licenseStore
+	if store == nil {
+		return true, nil
+	}
+	state, err := store.Load()
+	if err != nil {
+		return false, err
+	}
+	if license.IsValidCached(state, service.deviceID, time.Now()) {
+		return true, nil
+	}
+	return false, errors.New("尚未授权或授权已失效，请激活授权码")
+}
+
+// ActivateLicense binds this device to a license key on the license server,
+// verifies the returned signed token client-side, and persists it. The input is
+// a plain license key in XXXX-XXXX-XXXX-XXXX form (same as jd-chrome-plugin).
+func (service *Service) ActivateLicense(rawKey string) error {
+	key := strings.TrimSpace(rawKey)
+	if key == "" {
+		err := errors.New("请输入授权码")
+		service.setLastError(err)
+		return err
+	}
+	state, err := service.licenseClient.Activate(key, service.deviceID, time.Now())
+	if err != nil {
+		service.setLastError(err)
+		return err
+	}
+	if err := service.licenseStore.Save(state); err != nil {
+		service.setLastError(err)
+		return err
+	}
+	service.setLastError(nil)
+	service.logger.Printf("license activated key=%s device=%s expires=%s", key, service.deviceID, state.ExpiresAt)
+	return nil
+}
+
+// VerifyLicense performs an online re-verification (mirrors the extension's
+// verifyLicenseOnline): if a key is cached it calls /verify; otherwise it tries
+// /auto-unlock by device. On a definitive server rejection the cached state is
+// cleared. It returns whether the device is authorized.
+func (service *Service) VerifyLicense() (bool, error) {
+	store := service.licenseStore
+	client := service.licenseClient
+	now := time.Now()
+
+	cached, _ := store.Load()
+	key := cached.Key
+
+	if key == "" {
+		state, err := client.AutoUnlock(service.deviceID, now)
+		if err != nil {
+			// No key + auto-unlock failed → simply unauthorized (not a hard error).
+			return false, nil
+		}
+		if err := store.Save(state); err != nil {
+			service.setLastError(err)
+			return false, err
+		}
+		service.setLastError(nil)
+		return true, nil
+	}
+
+	state, err := client.Verify(key, service.deviceID, now)
+	if err != nil {
+		// Distinguish a definitive server rejection from a transient network error.
+		switch err.Error() {
+		case "revoked", "expired", "device-mismatch", "license-not-found", "key-mismatch":
+			_ = store.Clear()
+			service.setLastError(err)
+			return false, err
+		default:
+			// Network/other: keep the cache, report not-authorized-now softly.
+			return license.IsValidCached(cached, service.deviceID, now), err
+		}
+	}
+	if err := store.Save(state); err != nil {
+		service.setLastError(err)
+		return false, err
+	}
+	service.setLastError(nil)
+	return true, nil
+}
+
+// DeactivateLicense removes the persisted license state.
+func (service *Service) DeactivateLicense() error {
+	if service.licenseStore == nil {
+		return nil
+	}
+	if err := service.licenseStore.Clear(); err != nil {
+		service.setLastError(err)
+		return err
+	}
+	service.setLastError(nil)
+	return nil
+}
+
+// GetLicenseState returns the persisted signed license state for UI display.
+func (service *Service) GetLicenseState() license.State {
+	if service.licenseStore == nil {
+		return license.State{}
+	}
+	state, _ := service.licenseStore.Load()
+	return state
+}
+
+// GetDeviceID returns the hardware-bound device fingerprint.
+func (service *Service) GetDeviceID() string {
+	return service.deviceID
+}
+
+// GetLicenseServerURL returns the configured license server base URL.
+func (service *Service) GetLicenseServerURL() string {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if service.licenseServerURL == "" {
+		return license.DefaultServerURL
+	}
+	return service.licenseServerURL
+}
+
+// SetLicenseServerURL persists a new license server base URL and rebuilds the
+// client. An empty value resets to the default.
+func (service *Service) SetLicenseServerURL(url string) error {
+	url = strings.TrimSpace(url)
+	if url == "" {
+		url = license.DefaultServerURL
+	}
+	if err := saveLicenseServerURL(service.paths.LicenseServerPath, url); err != nil {
+		service.setLastError(err)
+		return err
+	}
+	service.mu.Lock()
+	service.licenseServerURL = url
+	service.licenseClient = license.NewClient(url)
+	service.mu.Unlock()
+	service.setLastError(nil)
+	return nil
 }
 
 // GetNotifyConfig returns the persisted DingTalk notification + discount config.
@@ -217,6 +381,13 @@ func (service *Service) StartProxy(options ServeOptions) (Status, error) {
 		service.mu.Unlock()
 		return service.Status(), fmt.Errorf("proxy is already running")
 	}
+	service.mu.Unlock()
+
+	// License gate: block proxy start when unlicensed.
+	if licensed, err := service.checkLicense(); !licensed {
+		return service.Status(), fmt.Errorf("license required: %w", err)
+	}
+
 	if options.Addr == "" {
 		options.Addr = "127.0.0.1:8899"
 	}
@@ -526,4 +697,55 @@ func recoverDanglingSystemProxy(paths Paths, logger *log.Logger) {
 	}
 	_ = os.Remove(paths.ProxyStatePath)
 	logger.Printf("recovered system proxy after previous unclean exit")
+}
+
+// ensureDeviceID returns a stable machine-bound identifier, persisting a UUID
+// fallback on disk when the hardware fingerprint is unavailable.
+func ensureDeviceID(paths Paths, logger *log.Logger) string {
+	id := license.DeviceID()
+	if id != "" {
+		return id
+	}
+	data, err := os.ReadFile(paths.DeviceIDPath)
+	if err == nil && len(data) > 0 {
+		return string(data)
+	}
+	fallback := generateUUID()
+	if err := os.MkdirAll(filepath.Dir(paths.DeviceIDPath), 0o700); err == nil {
+		if err := os.WriteFile(paths.DeviceIDPath, []byte(fallback), 0o600); err != nil {
+			logger.Printf("failed to persist device-id fallback: %v", err)
+		}
+	}
+	return fallback
+}
+
+// loadLicenseServerURL reads the persisted license server base URL, defaulting
+// to license.DefaultServerURL when the file is missing or empty.
+func loadLicenseServerURL(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return license.DefaultServerURL
+	}
+	url := strings.TrimSpace(string(data))
+	if url == "" {
+		return license.DefaultServerURL
+	}
+	return url
+}
+
+// saveLicenseServerURL persists the license server base URL.
+func saveLicenseServerURL(path, url string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(strings.TrimSpace(url)), 0o600)
+}
+
+func generateUUID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }

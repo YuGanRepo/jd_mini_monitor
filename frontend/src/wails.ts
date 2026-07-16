@@ -9,6 +9,7 @@ export type Status = {
   baseDir: string;
   logDir: string;
   proxyStatePath: string;
+  licensed: boolean;
   lastError: string;
 };
 
@@ -101,6 +102,18 @@ export type NotifyConfig = {
   template: string;
 };
 
+export type LicenseState = {
+  key: string;
+  deviceId: string;
+  status: string;
+  expiresAt: string;
+  issuedAt: string;
+  serverTime: string;
+  nonce: string;
+  signature: string;
+  lastVerifiedAt: string;
+};
+
 type DesktopApi = {
   GetDefaults(): Promise<DesktopDefaults>;
   GetStatus(): Promise<Status>;
@@ -124,6 +137,13 @@ type DesktopApi = {
   GetNotifyConfig(): Promise<NotifyConfig>;
   SaveNotifyConfig(config: NotifyConfig): Promise<void>;
   TestNotify(config: NotifyConfig): Promise<void>;
+  ActivateLicense(licenseKey: string): Promise<void>;
+  VerifyLicense(): Promise<boolean>;
+  DeactivateLicense(): Promise<void>;
+  GetLicenseState(): Promise<LicenseState>;
+  GetDeviceID(): Promise<string>;
+  GetLicenseServerURL(): Promise<string>;
+  SetLicenseServerURL(url: string): Promise<void>;
 };
 
 declare global {

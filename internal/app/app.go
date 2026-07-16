@@ -18,11 +18,14 @@ import (
 )
 
 type Paths struct {
-	BaseDir          string
-	CertDir          string
-	LogDir           string
-	ProxyStatePath   string
-	NotifyConfigPath string
+	BaseDir           string
+	CertDir           string
+	LogDir            string
+	ProxyStatePath    string
+	NotifyConfigPath  string
+	LicenseStatePath  string
+	LicenseServerPath string
+	DeviceIDPath      string
 }
 
 type ServeOptions struct {
@@ -39,11 +42,14 @@ func DefaultPaths() (Paths, error) {
 	}
 	baseDir := filepath.Join(base, "MiniProxy")
 	paths := Paths{
-		BaseDir:          baseDir,
-		CertDir:          filepath.Join(baseDir, "certs"),
-		LogDir:           filepath.Join(baseDir, "logs"),
-		ProxyStatePath:   filepath.Join(baseDir, "previous-proxy.json"),
-		NotifyConfigPath: filepath.Join(baseDir, "notify.json"),
+		BaseDir:           baseDir,
+		CertDir:           filepath.Join(baseDir, "certs"),
+		LogDir:            filepath.Join(baseDir, "logs"),
+		ProxyStatePath:    filepath.Join(baseDir, "previous-proxy.json"),
+		NotifyConfigPath:  filepath.Join(baseDir, "notify.json"),
+		LicenseStatePath:  filepath.Join(baseDir, "license-state.json"),
+		LicenseServerPath: filepath.Join(baseDir, "license-server.txt"),
+		DeviceIDPath:      filepath.Join(baseDir, "device-id"),
 	}
 	for _, dir := range []string{paths.BaseDir, paths.CertDir, paths.LogDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {

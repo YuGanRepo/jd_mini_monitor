@@ -17,15 +17,17 @@ import {
   Row,
   Select,
   Space,
+  Spin,
   Switch,
   Table,
   Tag,
   Typography,
 } from 'antd';
+import { SafetyCertificateOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { ThemeConfig } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
-import { api, DesktopDefaults, JDAutomationOptions, JDAutomationStatus, NotifyConfig, RequestLogEntry, SKUEntry, SKUSnapshot, Status } from './wails';
+import { api, DesktopDefaults, JDAutomationOptions, JDAutomationStatus, LicenseState, NotifyConfig, RequestLogEntry, SKUEntry, SKUSnapshot, Status } from './wails';
 import './styles.css';
 
 const emptyStatus: Status = {
@@ -39,6 +41,7 @@ const emptyStatus: Status = {
   baseDir: '',
   logDir: '',
   proxyStatePath: '',
+  licensed: false,
   lastError: '',
 };
 
@@ -129,10 +132,23 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [notifyConfig, setNotifyConfig] = useState<NotifyConfig>(defaultNotifyConfig);
 
+  const [licenseState, setLicenseState] = useState<LicenseState>({ key: '', deviceId: '', status: '', expiresAt: '', issuedAt: '', serverTime: '', nonce: '', signature: '', lastVerifiedAt: '' });
+  const [licenseKey, setLicenseKey] = useState('');
+  const [deviceID, setDeviceID] = useState('');
+  const [licenseServerURL, setLicenseServerURL] = useState('');
+
+  const [licenseChecked, setLicenseChecked] = useState(false);
+  const [licenseAuthorized, setLicenseAuthorized] = useState(false);
+
   const { message } = AntApp.useApp();
 
   useEffect(() => {
-    void initialize();
+    checkLicense();
+  }, []);
+
+  // Load defaults & status once authorized (= always, since license is soft-gate).
+  useEffect(() => {
+    loadAppState();
   }, []);
 
   useEffect(() => {
@@ -171,7 +187,37 @@ function App() {
     return () => window.clearInterval(timer);
   }, [jdStatus.running]);
 
-  async function initialize() {
+  // checkLicense mirrors jd-chrome-plugin's App.jsx verifyLicenseOnline: it does
+  // an online re-verification against the license server (device auto-unlock or
+  // key re-check), then reflects the resulting authorized state into the gate.
+  // Falls back to the cached Status.licensed if the backend/API is unavailable.
+  async function checkLicense() {
+    try {
+      const [id, serverURL] = await Promise.all([
+        api().GetDeviceID(),
+        api().GetLicenseServerURL(),
+      ]);
+      setDeviceID(id);
+      setLicenseServerURL(serverURL);
+
+      let authorized = false;
+      try {
+        authorized = await api().VerifyLicense();
+      } catch {
+        // Network/transient error: fall back to the cached gate.
+        authorized = (await api().GetStatus()).licensed;
+      }
+      setLicenseState(await api().GetLicenseState());
+      setLicenseAuthorized(authorized);
+    } catch {
+      // license API missing (older backend): allow access.
+      setLicenseAuthorized(true);
+    } finally {
+      setLicenseChecked(true);
+    }
+  }
+
+  async function loadAppState() {
     await runTask(async () => {
       const loadedDefaults = await api().GetDefaults();
       setDefaults(loadedDefaults);
@@ -259,6 +305,29 @@ function App() {
     await runTask(async () => {
       await api().TestNotify(notifyConfig);
     }, '测试消息已发送，请到钉钉群查看');
+  }
+
+  async function activateLicense() {
+    await runTask(async () => {
+      await api().ActivateLicense(licenseKey);
+      message.success('授权码已激活');
+      await checkLicense();
+      setLicenseKey('');
+    });
+  }
+
+  async function deactivateLicense() {
+    await runTask(async () => {
+      await api().DeactivateLicense();
+      await checkLicense();
+    }, '已停用授权码');
+  }
+
+  async function saveLicenseServer() {
+    await runTask(async () => {
+      await api().SetLicenseServerURL(licenseServerURL);
+      await checkLicense();
+    }, '授权服务器地址已保存');
   }
 
   async function toggleJDAutomation(enabled: boolean) {
@@ -376,6 +445,113 @@ function App() {
     { key: 'c6', label: '默认值', children: <Typography.Text style={{ fontSize: 12 }}>{`${defaults.proxyAddr} · ${defaults.rulesPath}`}</Typography.Text> },
   ];
 
+  // ---- Error reason mapping (mirrors jd-chrome-plugin LicenseGate.jsx) ---- //
+  const REASON_TEXT: Record<string, string> = {
+    'network': '无法连接授权服务器，请检查网络或服务器地址后重试。',
+    '网络请求失败': '无法连接授权服务器，请检查网络或服务器地址后重试。',
+    'expired': '授权已过期，请续费或联系管理员延期。',
+    'revoked': '该授权码已被吊销，请联系管理员。',
+    'device-mismatch': '该授权码已绑定其他设备。如需换机，请联系管理员解绑后重新激活。',
+    'device-limit': '该授权码绑定的设备数已达上限。',
+    'license-not-found': '授权码不存在，请核对后重试。',
+    'invalid-signature': '授权校验失败（签名无效），请联系管理员。',
+    'invalid-response': '授权服务器返回异常，请稍后重试。',
+    'key-mismatch': '授权校验失败（授权码不匹配）。',
+  };
+
+  function licenseReasonText(lastError: string): string {
+    if (!lastError) return '请输入授权码以激活。';
+    for (const [key, text] of Object.entries(REASON_TEXT)) {
+      if (lastError.includes(key)) return text;
+    }
+    return `授权校验未通过：${lastError}`;
+  }
+
+  // ---- License gate: 3-branch render (Spin → LicenseGate → Main app) ----
+
+  if (!licenseChecked) {
+    return (
+      <div className="app-shell" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
+        <Spin size="large" tip="正在校验授权…" />
+      </div>
+    );
+  }
+
+  if (!licenseAuthorized) {
+    return (
+      <div className="app-shell" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
+        <Card style={{ width: 480, textAlign: 'center' }} bordered>
+          <Space direction="vertical" size="large" style={{ width: '100%' }}>
+            <div>
+              <SafetyCertificateOutlined style={{ fontSize: 40, color: ACCENT.mint }} />
+              <Typography.Title level={3} style={{ marginTop: 12, marginBottom: 4 }}>授权验证</Typography.Title>
+              <Typography.Text type="secondary">Mini Proxy · License 激活（联网校验）</Typography.Text>
+            </div>
+
+            {status.lastError && (
+              <Alert
+                type={status.lastError.includes('网络') ? 'warning' : 'error'}
+                message={licenseReasonText(status.lastError)}
+                showIcon
+              />
+            )}
+
+            <div style={{ textAlign: 'left' }}>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>本机设备 ID（换机解绑时提供给管理员）</Typography.Text>
+              <Typography.Paragraph copyable={{ text: deviceID || '' }} style={{ marginBottom: 0, marginTop: 4 }}>
+                <Typography.Text code>{deviceID || '生成中...'}</Typography.Text>
+              </Typography.Paragraph>
+            </div>
+
+            <div style={{ textAlign: 'left' }}>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>授权码</Typography.Text>
+              <Input
+                value={licenseKey}
+                onChange={(event) => setLicenseKey(event.target.value)}
+                onPressEnter={() => void activateLicense()}
+                placeholder="XXXX-XXXX-XXXX-XXXX"
+                autoFocus
+                style={{ marginTop: 4, fontFamily: '"Cascadia Code", Consolas, monospace', letterSpacing: 1 }}
+              />
+            </div>
+
+            <details style={{ textAlign: 'left' }}>
+              <summary style={{ cursor: 'pointer', color: '#888', fontSize: 12 }}>授权服务器地址（高级）</summary>
+              <Space.Compact style={{ width: '100%', marginTop: 8 }}>
+                <Input
+                  value={licenseServerURL}
+                  onChange={(event) => setLicenseServerURL(event.target.value)}
+                  placeholder="http://118.196.100.19:8787"
+                  style={{ fontFamily: '"Cascadia Code", Consolas, monospace' }}
+                />
+                <Button onClick={() => void saveLicenseServer()} loading={busy}>保存</Button>
+              </Space.Compact>
+            </details>
+
+            <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+              <Button onClick={() => void checkLicense()} loading={busy}>重新校验</Button>
+              <Button type="primary" onClick={() => void activateLicense()} loading={busy}>激活</Button>
+            </Space>
+
+            <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
+              授权码由管理员在授权服务器签发。激活需联网校验并绑定本机设备。
+            </Typography.Text>
+          </Space>
+        </Card>
+      </div>
+    );
+  }
+
+  // ---- Authorised: full dashboard ----
+  const expiryDate = licenseState.expiresAt ? new Date(licenseState.expiresAt) : null;
+  const expiryTag = expiryDate && !Number.isNaN(expiryDate.getTime()) ? (
+    <Tag color="success" style={{ fontWeight: 600 }} title="授权到期时间">
+      授权至 {expiryDate.toLocaleDateString('zh-CN')}
+    </Tag>
+  ) : (
+    <Tag color="success" style={{ fontWeight: 600 }}>已激活</Tag>
+  );
+
   return (
     <Layout className="app-shell">
       <Layout.Header className="app-header">
@@ -383,9 +559,13 @@ function App() {
           <Typography.Text className="eyebrow">MINI PROXY 桌面端</Typography.Text>
           <Typography.Title level={3} style={{ margin: 0 }}>小程序自动化控制台</Typography.Title>
         </div>
-        <Tag color={status.proxyRunning ? 'green' : 'default'} style={{ fontWeight: 700, padding: '4px 12px', fontSize: 13 }}>
-          {status.proxyRunning ? '● 代理运行中' : '○ 代理已停止'}
-        </Tag>
+        <Space>
+          {expiryTag}
+          <Button size="small" danger type="link" onClick={() => void deactivateLicense()} disabled={busy} style={{ padding: 0 }}>停用授权</Button>
+          <Tag color={status.proxyRunning ? 'green' : 'default'} style={{ fontWeight: 700, padding: '4px 12px', fontSize: 13 }}>
+            {status.proxyRunning ? '● 代理运行中' : '○ 代理已停止'}
+          </Tag>
+        </Space>
       </Layout.Header>
 
       <Layout.Content>

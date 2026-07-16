@@ -29,6 +29,7 @@ export namespace app {
 	    baseDir: string;
 	    logDir: string;
 	    proxyStatePath: string;
+	    licensed: boolean;
 	    lastError: string;
 	
 	    static createFrom(source: any = {}) {
@@ -47,7 +48,41 @@ export namespace app {
 	        this.baseDir = source["baseDir"];
 	        this.logDir = source["logDir"];
 	        this.proxyStatePath = source["proxyStatePath"];
+	        this.licensed = source["licensed"];
 	        this.lastError = source["lastError"];
+	    }
+	}
+
+}
+
+export namespace license {
+	
+	export class State {
+	    key: string;
+	    deviceId: string;
+	    status: string;
+	    expiresAt: string;
+	    issuedAt: string;
+	    serverTime: string;
+	    nonce: string;
+	    signature: string;
+	    lastVerifiedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new State(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.deviceId = source["deviceId"];
+	        this.status = source["status"];
+	        this.expiresAt = source["expiresAt"];
+	        this.issuedAt = source["issuedAt"];
+	        this.serverTime = source["serverTime"];
+	        this.nonce = source["nonce"];
+	        this.signature = source["signature"];
+	        this.lastVerifiedAt = source["lastVerifiedAt"];
 	    }
 	}
 
