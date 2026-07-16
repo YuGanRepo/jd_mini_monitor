@@ -15,11 +15,14 @@ The Wails window provides:
 - current-user root certificate status, install, and uninstall
 - file-based JSON rule loading (default: `configs/jd.rules.json`)
 - JD mini-program automation controls for tab switching cycles
-- runtime paths and latest error/status display
+- JD cart SKU extraction, price-change history, filtering, and persisted snapshots
+- DingTalk text/Markdown notifications with optional signing and templates
+- server-verified device-bound license activation with a 12-hour offline cache
+- request logs, runtime paths, and latest error/status display
 
 ## Desktop Build
 
-Install Go 1.22+, Node.js, npm, and the Wails CLI:
+Install Go 1.25+, Node.js 22.12+ (or 20.19+), npm, and the Wails CLI:
 
 ```powershell
 go install github.com/wailsapp/wails/v2/cmd/wails@latest
@@ -30,6 +33,15 @@ Then build the desktop exe:
 ```powershell
 .\scripts\build.ps1
 ```
+
+The desktop release is written to `build\bin`. The build script also copies
+`configs` beside the executable, so the app can be launched from any working
+directory.
+
+On launch, the desktop checks the current-user root certificate and installs it
+only when its thumbprint is missing. With a valid cached license it also starts
+the local proxy automatically; Windows proxy settings are changed only after
+the listener is ready, and matching registry values are left untouched.
 
 For development:
 
@@ -70,6 +82,10 @@ go build -o dist/mini-proxy.exe ./cmd/mini-proxy
 - optional Windows system proxy enable/restore
 - UI Automation inspect/run for ordinary desktop buttons
 - Wails desktop app for operational control
+- JD cartview SKU extraction and persisted price-change tracking
+- DingTalk price-change notification
+- cancellable coordinate automation for the JD mini-program window
+- signed online license activation with offline cache validation
 
 ## Current Limits
 
@@ -77,3 +93,7 @@ go build -o dist/mini-proxy.exe ./cmd/mini-proxy
 - only HTTP/1.1 MITM is enabled
 - apps that ignore Windows system proxy need separate per-app proxy configuration
 - self-drawn/game UIs may not expose buttons through UI Automation
+- the default license endpoint currently uses HTTP; see `docs/security.md`
+
+See `docs/feature-completeness.md` for the current release-readiness audit,
+remaining risks, and Windows acceptance checklist.

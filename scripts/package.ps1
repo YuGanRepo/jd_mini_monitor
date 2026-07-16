@@ -21,7 +21,7 @@
   Skip `go test ./...` before building.
 
 .PARAMETER SkipNpmInstall
-  Skip `npm install` (use the existing frontend\node_modules as-is).
+  Skip `npm ci` (use the existing frontend\node_modules as-is).
 
 .EXAMPLE
   .\scripts\package.ps1              # desktop app only (default)
@@ -119,7 +119,7 @@ try {
     Write-Host "==> Building frontend" -ForegroundColor Cyan
     Push-Location (Join-Path $root "frontend")
     try {
-      if (-not $SkipNpmInstall) { npm install }
+      if (-not $SkipNpmInstall) { npm ci }
       npm run build
     } finally {
       Pop-Location
@@ -129,6 +129,9 @@ try {
     wails build
     $desktopExe = Join-Path $root "build\bin\mini-proxy-desktop.exe"
     if (Test-Path $desktopExe) {
+	  $desktopConfigDir = Join-Path $root "build\bin\configs"
+	  New-Item -ItemType Directory -Force -Path $desktopConfigDir | Out-Null
+	  Copy-Item -Path (Join-Path $root "configs\*") -Destination $desktopConfigDir -Recurse -Force
       Write-Host ("    Desktop: " + $desktopExe) -ForegroundColor Green
     }
   }
@@ -137,6 +140,9 @@ try {
     Write-Host "==> Building CLI" -ForegroundColor Cyan
     $cliExe = Join-Path $dist "mini-proxy.exe"
     go build -trimpath -ldflags "-s -w" -o $cliExe ./cmd/mini-proxy
+  $cliConfigDir = Join-Path $dist "configs"
+  New-Item -ItemType Directory -Force -Path $cliConfigDir | Out-Null
+  Copy-Item -Path (Join-Path $root "configs\*") -Destination $cliConfigDir -Recurse -Force
     Write-Host ("    CLI:     " + $cliExe) -ForegroundColor Green
   }
 

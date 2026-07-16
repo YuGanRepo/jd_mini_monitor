@@ -10,10 +10,6 @@ export function DeactivateLicense() {
   return window['go']['main']['DesktopApp']['DeactivateLicense']();
 }
 
-export function FormatJSON(arg1) {
-  return window['go']['main']['DesktopApp']['FormatJSON'](arg1);
-}
-
 export function GetDefaults() {
   return window['go']['main']['DesktopApp']['GetDefaults']();
 }
@@ -50,32 +46,16 @@ export function GetStatus() {
   return window['go']['main']['DesktopApp']['GetStatus']();
 }
 
-export function InspectAutomation(arg1) {
-  return window['go']['main']['DesktopApp']['InspectAutomation'](arg1);
-}
-
 export function InstallCert() {
   return window['go']['main']['DesktopApp']['InstallCert']();
-}
-
-export function ReadTextFile(arg1) {
-  return window['go']['main']['DesktopApp']['ReadTextFile'](arg1);
 }
 
 export function ResetSKUList() {
   return window['go']['main']['DesktopApp']['ResetSKUList']();
 }
 
-export function RunAutomation(arg1) {
-  return window['go']['main']['DesktopApp']['RunAutomation'](arg1);
-}
-
 export function SaveNotifyConfig(arg1) {
   return window['go']['main']['DesktopApp']['SaveNotifyConfig'](arg1);
-}
-
-export function SelectJSONFile(arg1) {
-  return window['go']['main']['DesktopApp']['SelectJSONFile'](arg1);
 }
 
 export function SetLicenseServerURL(arg1) {
@@ -106,14 +86,6 @@ export function UninstallCert() {
   return window['go']['main']['DesktopApp']['UninstallCert']();
 }
 
-export function ValidateRulesText(arg1) {
-  return window['go']['main']['DesktopApp']['ValidateRulesText'](arg1);
-}
-
 export function VerifyLicense() {
   return window['go']['main']['DesktopApp']['VerifyLicense']();
-}
-
-export function WriteTextFile(arg1, arg2) {
-  return window['go']['main']['DesktopApp']['WriteTextFile'](arg1, arg2);
 }

@@ -8,8 +8,11 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
@@ -204,8 +207,34 @@ func TestClientRejectsServerError(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(server.URL)
-	if _, err := client.Activate("K", "dev-1", time.Now()); err == nil || err.Error() != "revoked" {
+	if _, err := client.Activate("K", "dev-1", time.Now()); err == nil || ErrorCode(err) != "revoked" {
 		t.Fatalf("expected revoked error, got %v", err)
+	}
+}
+
+func TestApplyResponseRejectsInactiveAndExpiredPayloads(t *testing.T) {
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	embedKey(t, key)
+	now := time.Now().UTC()
+
+	for _, test := range []struct {
+		name   string
+		code   string
+		mutate func(*TokenPayload)
+	}{
+		{name: "inactive", code: "revoked", mutate: func(payload *TokenPayload) { payload.Status = "revoked" }},
+		{name: "expired", code: "expired", mutate: func(payload *TokenPayload) { payload.ExpiresAt = now.Add(-time.Minute).Format(time.RFC3339Nano) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			payload := samplePayload("dev-1", now.Add(time.Hour), now)
+			test.mutate(&payload)
+			response := serverResponse{Payload: &payload, Signature: signP1363(t, key, payload)}
+			_, err := applyResponse(response, payload.Key, payload.DeviceID, now)
+			var serverErr *ServerError
+			if !errors.As(err, &serverErr) || serverErr.Code != test.code {
+				t.Fatalf("applyResponse() error = %v, want code %q", err, test.code)
+			}
+		})
 	}
 }
 
@@ -222,14 +251,19 @@ func TestClientRejectsDeviceMismatch(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(server.URL)
-	if _, err := client.Activate("AAAA-BBBB-CCCC-DDDD", "dev-1", time.Now()); err == nil {
-		t.Fatal("device mismatch in signed payload must be rejected")
+	if _, err := client.Activate("AAAA-BBBB-CCCC-DDDD", "dev-1", time.Now()); err == nil || ErrorCode(err) != "device-mismatch" {
+		t.Fatalf("device mismatch in signed payload error = %v", err)
 	}
 }
 
 func TestDeviceIDIsStable(t *testing.T) {
-	if DeviceID() != DeviceID() {
+	first := deviceIDFromParts("host", "serial", nil)
+	second := deviceIDFromParts("host", "serial", nil)
+	if first == "" || first != second {
 		t.Fatal("DeviceID not stable")
+	}
+	if got := deviceIDFromParts("", "", nil); got != "" {
+		t.Fatalf("empty hardware fingerprint = %q, want empty fallback signal", got)
 	}
 }
 
@@ -254,5 +288,34 @@ func TestStoreRoundTrip(t *testing.T) {
 	}
 	if s, _ := store.Load(); s.Key != "" {
 		t.Fatal("state should be cleared")
+	}
+}
+
+func TestStoreConcurrentSaves(t *testing.T) {
+	store := NewStore(t.TempDir() + "/license-state.json")
+	const writers = 32
+	var waitGroup sync.WaitGroup
+	errors := make(chan error, writers)
+
+	for index := 0; index < writers; index++ {
+		waitGroup.Add(1)
+		go func(index int) {
+			defer waitGroup.Done()
+			errors <- store.Save(State{Key: "KEY-" + strconv.Itoa(index), Status: "active"})
+		}(index)
+	}
+	waitGroup.Wait()
+	close(errors)
+	for err := range errors {
+		if err != nil {
+			t.Fatalf("concurrent Save() error = %v", err)
+		}
+	}
+	state, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load() after concurrent saves error = %v", err)
+	}
+	if state.Key == "" {
+		t.Fatal("Load() after concurrent saves returned an empty state")
 	}
 }

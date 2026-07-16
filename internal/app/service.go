@@ -53,6 +53,8 @@ type Service struct {
 	cleanupLogger     func()
 	certManager       *cert.Manager
 	proxyServer       *proxy.Server
+	proxyStarting     bool
+	proxyStopping     bool
 	skuStore          *sku.Store
 	licenseStore      *license.Store
 	licenseClient     *license.Client
@@ -63,8 +65,11 @@ type Service struct {
 	systemProxyActive bool
 	lastError         string
 
-	jdAutomationCancel context.CancelFunc
-	jdAutomationStatus JDAutomationStatus
+	jdAutomationCancel        context.CancelFunc
+	jdAutomationDone          chan struct{}
+	jdAutomationStarting      bool
+	jdAutomationStopRequested bool
+	jdAutomationStatus        JDAutomationStatus
 }
 
 func NewService() (*Service, error) {
@@ -106,7 +111,7 @@ func NewService() (*Service, error) {
 		licenseServerURL: licenseServerURL,
 		deviceID:         deviceID,
 		addr:             "127.0.0.1:8899",
-		rulesPath:        "configs/jd.rules.json",
+		rulesPath:        ResolveRuntimePath("configs/jd.rules.json"),
 	}, nil
 }
 
@@ -180,9 +185,18 @@ func (service *Service) GetSKUList() sku.Snapshot {
 func (service *Service) ResetSKUList() {
 	service.mu.Lock()
 	store := service.skuStore
+	server := service.proxyServer
+	snapshotPath := filepath.Join(service.paths.LogDir, "intercepts", "sku-latest.json")
 	service.mu.Unlock()
+	if server != nil {
+		server.ResetSKUList()
+		return
+	}
 	if store != nil {
 		store.Reset()
+	}
+	if err := os.Remove(snapshotPath); err != nil && !os.IsNotExist(err) {
+		service.logger.Printf("remove sku snapshot failed: %v", err)
 	}
 }
 
@@ -258,9 +272,10 @@ func (service *Service) VerifyLicense() (bool, error) {
 	state, err := client.Verify(key, service.deviceID, now)
 	if err != nil {
 		// Distinguish a definitive server rejection from a transient network error.
-		switch err.Error() {
+		switch license.ErrorCode(err) {
 		case "revoked", "expired", "device-mismatch", "license-not-found", "key-mismatch":
 			_ = store.Clear()
+			service.stopProxyAfterLicenseInvalidation()
 			service.setLastError(err)
 			return false, err
 		default:
@@ -285,8 +300,23 @@ func (service *Service) DeactivateLicense() error {
 		service.setLastError(err)
 		return err
 	}
+	service.stopProxyAfterLicenseInvalidation()
 	service.setLastError(nil)
 	return nil
+}
+
+func (service *Service) stopProxyAfterLicenseInvalidation() {
+	service.mu.Lock()
+	running := service.proxyServer != nil || service.systemProxyActive
+	service.mu.Unlock()
+	if !running {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := service.StopProxy(ctx); err != nil && service.logger != nil {
+		service.logger.Printf("stop proxy after license invalidation failed: %v", err)
+	}
 }
 
 // GetLicenseState returns the persisted signed license state for UI display.
@@ -375,13 +405,40 @@ func (service *Service) TestNotify(config notify.Config) error {
 	return nil
 }
 
+// AutoStartProxy starts the default desktop proxy only when this device has a
+// valid cached license. Unlicensed first launches remain on the activation
+// screen without changing Windows proxy settings.
+func (service *Service) AutoStartProxy() error {
+	licensed, _ := service.checkLicense()
+	if !licensed {
+		return nil
+	}
+	_, err := service.StartProxy(ServeOptions{
+		Addr:              "127.0.0.1:8899",
+		RulesPath:         ResolveRuntimePath("configs/jd.rules.json"),
+		EnableSystemProxy: true,
+		ProxyOverride:     "localhost;127.0.0.1;<local>",
+	})
+	return err
+}
+
 func (service *Service) StartProxy(options ServeOptions) (Status, error) {
 	service.mu.Lock()
-	if service.proxyServer != nil {
+	if service.proxyStopping {
+		service.mu.Unlock()
+		return service.Status(), fmt.Errorf("proxy is still stopping")
+	}
+	if service.proxyServer != nil || service.proxyStarting {
 		service.mu.Unlock()
 		return service.Status(), fmt.Errorf("proxy is already running")
 	}
+	service.proxyStarting = true
 	service.mu.Unlock()
+	defer func() {
+		service.mu.Lock()
+		service.proxyStarting = false
+		service.mu.Unlock()
+	}()
 
 	// License gate: block proxy start when unlicensed.
 	if licensed, err := service.checkLicense(); !licensed {
@@ -394,10 +451,10 @@ func (service *Service) StartProxy(options ServeOptions) (Status, error) {
 	if options.RulesPath == "" {
 		options.RulesPath = "configs/jd.rules.json"
 	}
+	options.RulesPath = ResolveRuntimePath(options.RulesPath)
 	if options.ProxyOverride == "" {
 		options.ProxyOverride = "localhost;127.0.0.1;<local>"
 	}
-	service.mu.Unlock()
 
 	ruleSet, err := rules.Load(options.RulesPath)
 	if err != nil {
@@ -405,11 +462,9 @@ func (service *Service) StartProxy(options ServeOptions) (Status, error) {
 		return service.Status(), err
 	}
 
-	if !service.certManager.IsTrustedRootInstalled() {
-		if err := service.certManager.InstallTrustedRoot(); err != nil {
-			service.setLastError(err)
-			return service.Status(), err
-		}
+	if _, err := service.certManager.EnsureTrustedRoot(); err != nil {
+		service.setLastError(err)
+		return service.Status(), err
 	}
 
 	proxyServer := proxy.New(proxy.Config{
@@ -448,6 +503,8 @@ func (service *Service) StartProxy(options ServeOptions) (Status, error) {
 		}
 		if err := winproxy.Enable(listener.Addr().String(), options.ProxyOverride); err != nil {
 			_ = listener.Close()
+			_ = winproxy.Restore(previousState)
+			_ = os.Remove(service.paths.ProxyStatePath)
 			service.setLastError(err)
 			return service.Status(), err
 		}
@@ -464,7 +521,7 @@ func (service *Service) StartProxy(options ServeOptions) (Status, error) {
 	go func() {
 		if err := proxyServer.Serve(listener); err != nil {
 			service.logger.Printf("proxy stopped with error: %v", err)
-			service.setLastError(err)
+			service.handleUnexpectedProxyExit(proxyServer, err)
 		}
 	}()
 
@@ -473,11 +530,25 @@ func (service *Service) StartProxy(options ServeOptions) (Status, error) {
 
 func (service *Service) StopProxy(ctx context.Context) (Status, error) {
 	service.mu.Lock()
+	if service.proxyStarting {
+		service.mu.Unlock()
+		return service.Status(), fmt.Errorf("proxy is still starting")
+	}
+	if service.proxyStopping {
+		service.mu.Unlock()
+		return service.Status(), fmt.Errorf("proxy is already stopping")
+	}
 	proxyServer := service.proxyServer
 	systemProxyActive := service.systemProxyActive
+	service.proxyStopping = proxyServer != nil || systemProxyActive
 	service.proxyServer = nil
 	service.systemProxyActive = false
 	service.mu.Unlock()
+	defer func() {
+		service.mu.Lock()
+		service.proxyStopping = false
+		service.mu.Unlock()
+	}()
 
 	var stopErr error
 	if proxyServer != nil {
@@ -508,8 +579,42 @@ func (service *Service) StopProxy(ctx context.Context) (Status, error) {
 	return service.Status(), nil
 }
 
+func (service *Service) handleUnexpectedProxyExit(proxyServer *proxy.Server, serveErr error) {
+	service.mu.Lock()
+	if service.proxyServer != proxyServer {
+		service.mu.Unlock()
+		return
+	}
+	systemProxyActive := service.systemProxyActive
+	service.proxyStopping = true
+	service.proxyServer = nil
+	service.systemProxyActive = false
+	service.mu.Unlock()
+
+	if systemProxyActive {
+		if state, err := winproxy.LoadState(service.paths.ProxyStatePath); err != nil {
+			service.logger.Printf("load previous proxy state after server exit failed: %v", err)
+		} else if err := winproxy.Restore(state); err != nil {
+			service.logger.Printf("restore previous proxy state after server exit failed: %v", err)
+		} else {
+			_ = os.Remove(service.paths.ProxyStatePath)
+		}
+	}
+	service.mu.Lock()
+	service.proxyStopping = false
+	service.mu.Unlock()
+	service.setLastError(serveErr)
+}
+
 func (service *Service) InstallCert() (Status, error) {
 	err := service.certManager.InstallTrustedRoot()
+	service.setLastError(err)
+	return service.Status(), err
+}
+
+// EnsureCert installs the root certificate only when it is not already trusted.
+func (service *Service) EnsureCert() (Status, error) {
+	_, err := service.certManager.EnsureTrustedRoot()
 	service.setLastError(err)
 	return service.Status(), err
 }
@@ -574,12 +679,10 @@ func (service *Service) RunAutomation(path string) error {
 // cart's "全部" and "服务" tabs; it never confirms orders or submits payments. Only one
 // run can be active at a time.
 func (service *Service) StartJDAutomation(options uiauto.CoordCycleOptions) (JDAutomationStatus, error) {
-	service.mu.Lock()
-	if service.jdAutomationCancel != nil {
-		service.mu.Unlock()
+	if !service.reserveJDAutomationStart() {
 		return service.GetJDAutomationStatus(), fmt.Errorf("JD automation is already running")
 	}
-	service.mu.Unlock()
+	defer service.releaseJDAutomationStart()
 
 	// Pre-check that the target mini-program window is already open, so the user
 	// gets an immediate, clear prompt instead of the run failing partway through.
@@ -591,10 +694,11 @@ func (service *Service) StartJDAutomation(options uiauto.CoordCycleOptions) (JDA
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	service.mu.Lock()
-	service.jdAutomationCancel = cancel
-	service.jdAutomationStatus = JDAutomationStatus{Running: true, TotalCycles: options.RepeatCount}
-	service.mu.Unlock()
+	done := make(chan struct{})
+	if !service.completeJDAutomationStart(cancel, done, options.RepeatCount) {
+		cancel()
+		return service.GetJDAutomationStatus(), context.Canceled
+	}
 
 	go func() {
 		err := uiauto.RunCoordCycle(ctx, options, service.logger, func(cycle int) {
@@ -605,6 +709,7 @@ func (service *Service) StartJDAutomation(options uiauto.CoordCycleOptions) (JDA
 
 		service.mu.Lock()
 		service.jdAutomationCancel = nil
+		service.jdAutomationDone = nil
 		service.jdAutomationStatus.Running = false
 		if err != nil && err != context.Canceled {
 			service.jdAutomationStatus.LastError = err.Error()
@@ -612,19 +717,58 @@ func (service *Service) StartJDAutomation(options uiauto.CoordCycleOptions) (JDA
 			service.jdAutomationStatus.LastError = ""
 		}
 		service.mu.Unlock()
+		close(done)
 	}()
 
 	return service.GetJDAutomationStatus(), nil
+}
+
+func (service *Service) reserveJDAutomationStart() bool {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if service.jdAutomationStarting || service.jdAutomationCancel != nil {
+		return false
+	}
+	service.jdAutomationStarting = true
+	service.jdAutomationStopRequested = false
+	return true
+}
+
+func (service *Service) completeJDAutomationStart(cancel context.CancelFunc, done chan struct{}, totalCycles int) bool {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if service.jdAutomationStopRequested {
+		service.jdAutomationStarting = false
+		return false
+	}
+	service.jdAutomationCancel = cancel
+	service.jdAutomationDone = done
+	service.jdAutomationStarting = false
+	service.jdAutomationStatus = JDAutomationStatus{Running: true, TotalCycles: totalCycles}
+	return true
+}
+
+func (service *Service) releaseJDAutomationStart() {
+	service.mu.Lock()
+	service.jdAutomationStarting = false
+	service.mu.Unlock()
 }
 
 // StopJDAutomation cancels a running JD automation cycle, if any. It is safe to call
 // even when nothing is running.
 func (service *Service) StopJDAutomation() JDAutomationStatus {
 	service.mu.Lock()
+	if service.jdAutomationStarting {
+		service.jdAutomationStopRequested = true
+	}
 	cancel := service.jdAutomationCancel
+	done := service.jdAutomationDone
 	service.mu.Unlock()
 	if cancel != nil {
 		cancel()
+	}
+	if done != nil {
+		<-done
 	}
 	return service.GetJDAutomationStatus()
 }
@@ -686,6 +830,17 @@ func recoverDanglingSystemProxy(paths Paths, logger *log.Logger) {
 	state, err := winproxy.LoadState(paths.ProxyStatePath)
 	if err != nil {
 		logger.Printf("recover system proxy: load state failed: %v", err)
+		current, readErr := winproxy.Read()
+		if readErr != nil || !proxyPointsToLocalProxy(current.Server, "") {
+			return
+		}
+		fallback := winproxy.State{Override: current.Override}
+		if restoreErr := winproxy.Restore(fallback); restoreErr != nil {
+			logger.Printf("recover system proxy: disable local proxy after corrupt state failed: %v", restoreErr)
+			return
+		}
+		_ = os.Remove(paths.ProxyStatePath)
+		logger.Printf("disabled dangling local proxy after corrupt recovery state")
 		return
 	}
 	if proxyPointsToLocalProxy(state.Server, "") {
@@ -708,7 +863,7 @@ func ensureDeviceID(paths Paths, logger *log.Logger) string {
 	}
 	data, err := os.ReadFile(paths.DeviceIDPath)
 	if err == nil && len(data) > 0 {
-		return string(data)
+		return strings.TrimSpace(string(data))
 	}
 	fallback := generateUUID()
 	if err := os.MkdirAll(filepath.Dir(paths.DeviceIDPath), 0o700); err == nil {

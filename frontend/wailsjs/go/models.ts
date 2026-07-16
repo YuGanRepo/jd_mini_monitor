@@ -126,22 +126,6 @@ export namespace main {
 	        this.proxyOverride = source["proxyOverride"];
 	    }
 	}
-	export class RulesValidationResult {
-	    valid: boolean;
-	    count: number;
-	    error: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new RulesValidationResult(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.valid = source["valid"];
-	        this.count = source["count"];
-	        this.error = source["error"];
-	    }
-	}
 
 }
 

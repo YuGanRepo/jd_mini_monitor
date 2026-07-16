@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,6 +29,12 @@ import (
 // maxRequestLogEntries bounds the in-memory request log ring buffer kept for
 // display in the desktop UI.
 const maxRequestLogEntries = 200
+
+const (
+	maxCartviewCaptureFiles = 100
+	maxJSONLBytes           = 10 << 20
+	maxJSONLBackups         = 3
+)
 
 // RequestLogEntry describes one request observed by the proxy. Matched
 // interception rules include RuleName; unmatched requests are logged as
@@ -62,8 +69,10 @@ type Server struct {
 	httpServer *http.Server
 	transport  *http.Transport
 
-	logMu       sync.Mutex
-	requestLogs []RequestLogEntry
+	logMu        sync.Mutex
+	requestLogs  []RequestLogEntry
+	captureMu    sync.Mutex
+	skuPersistMu sync.Mutex
 }
 
 func New(config Config) *Server {
@@ -377,6 +386,9 @@ func (server *Server) appendCaptureJSONL(name string, value any) {
 		return
 	}
 	path := filepath.Join(server.captureDir, name)
+	server.captureMu.Lock()
+	defer server.captureMu.Unlock()
+	server.rotateCaptureFile(path)
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		server.logger.Printf("capture: open %s failed: %v", path, err)
@@ -398,10 +410,13 @@ func (server *Server) writeCaptureFile(prefix string, ext string, data []byte) s
 	}
 	name := fmt.Sprintf("%s-%s.%s", prefix, time.Now().Format("20060102-150405.000000"), ext)
 	path := filepath.Join(server.captureDir, name)
+	server.captureMu.Lock()
+	defer server.captureMu.Unlock()
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		server.logger.Printf("capture: write %s failed: %v", path, err)
 		return ""
 	}
+	server.pruneCaptureFiles(fmt.Sprintf("%s-*.%s", prefix, ext), maxCartviewCaptureFiles)
 	return path
 }
 
@@ -420,9 +435,46 @@ func (server *Server) writeLatestSKUFile() {
 		return
 	}
 	path := filepath.Join(server.captureDir, "sku-latest.json")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	server.captureMu.Lock()
+	defer server.captureMu.Unlock()
+	if err := writeFileAtomic(path, data, 0o600); err != nil {
 		server.logger.Printf("capture: write %s failed: %v", path, err)
 	}
+}
+
+func (server *Server) rotateCaptureFile(path string) {
+	info, err := os.Stat(path)
+	if err != nil || info.Size() < maxJSONLBytes {
+		return
+	}
+	_ = os.Remove(fmt.Sprintf("%s.%d", path, maxJSONLBackups))
+	for index := maxJSONLBackups - 1; index >= 1; index-- {
+		_ = os.Rename(fmt.Sprintf("%s.%d", path, index), fmt.Sprintf("%s.%d", path, index+1))
+	}
+	_ = os.Rename(path, path+".1")
+}
+
+func (server *Server) pruneCaptureFiles(pattern string, keep int) {
+	matches, err := filepath.Glob(filepath.Join(server.captureDir, pattern))
+	if err != nil || len(matches) <= keep {
+		return
+	}
+	sort.Strings(matches)
+	for _, path := range matches[:len(matches)-keep] {
+		_ = os.Remove(path)
+	}
+}
+
+func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, mode); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // RecentLogs returns a snapshot copy of the most recent proxied requests, oldest first.
@@ -438,6 +490,15 @@ func (server *Server) RecentLogs() []RequestLogEntry {
 // responses whose matching rule declared an "extract" target.
 func (server *Server) SKUSnapshot() sku.Snapshot {
 	return server.skuStore.Snapshot()
+}
+
+// ResetSKUList clears the shared store and its persisted snapshot without
+// racing an in-flight extraction update.
+func (server *Server) ResetSKUList() {
+	server.skuPersistMu.Lock()
+	defer server.skuPersistMu.Unlock()
+	server.skuStore.Reset()
+	server.writeLatestSKUFile()
 }
 
 // notifyPriceChanges pushes a DingTalk notification for the SKUs whose final
@@ -535,8 +596,10 @@ func (server *Server) extractFromResponse(rule *rules.Rule, response *http.Respo
 			server.logger.Printf("extract: parse cartview failed for rule %q (len=%d, file=%s): %v", rule.Name, len(payload), payloadPath, parseErr)
 			return
 		}
+		server.skuPersistMu.Lock()
 		result := server.skuStore.Update(skus)
 		server.writeLatestSKUFile()
+		server.skuPersistMu.Unlock()
 		server.notifyPriceChanges(result.ChangedEntries)
 		server.appendCaptureJSONL("sku-events.jsonl", map[string]any{
 			"time":         time.Now(),
@@ -612,9 +675,7 @@ func modifyResponse(response *http.Response, rule rules.Rule) (*http.Response, e
 	if rule.Action.Body != "" {
 		_ = response.Body.Close()
 		body := []byte(rule.Action.Body)
-		response.Body = io.NopCloser(bytes.NewReader(body))
-		response.ContentLength = int64(len(body))
-		response.Header.Set("Content-Length", strconv.Itoa(len(body)))
+		setBufferedBody(response, body)
 		response.Header.Del("Content-Encoding")
 		if rule.Action.ContentType != "" {
 			response.Header.Set("Content-Type", rule.Action.ContentType)

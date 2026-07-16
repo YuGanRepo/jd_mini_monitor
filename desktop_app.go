@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"path/filepath"
 	"time"
 
@@ -13,7 +11,6 @@ import (
 	"mini-proxy/internal/license"
 	"mini-proxy/internal/notify"
 	"mini-proxy/internal/proxy"
-	"mini-proxy/internal/rules"
 	"mini-proxy/internal/sku"
 	"mini-proxy/internal/uiauto"
 )
@@ -37,12 +34,6 @@ type DesktopDefaults struct {
 	ProxyOverride  string `json:"proxyOverride"`
 }
 
-type RulesValidationResult struct {
-	Valid bool   `json:"valid"`
-	Count int    `json:"count"`
-	Error string `json:"error"`
-}
-
 func NewDesktopApp() (*DesktopApp, error) {
 	service, err := coreapp.NewService()
 	if err != nil {
@@ -53,6 +44,12 @@ func NewDesktopApp() (*DesktopApp, error) {
 
 func (app *DesktopApp) Startup(ctx context.Context) {
 	app.ctx = ctx
+	if _, err := app.service.EnsureCert(); err != nil {
+		runtime.LogError(ctx, "automatic certificate setup failed: "+err.Error())
+	}
+	if err := app.service.AutoStartProxy(); err != nil {
+		runtime.LogError(ctx, "automatic proxy startup failed: "+err.Error())
+	}
 }
 
 func (app *DesktopApp) Shutdown(ctx context.Context) {
@@ -65,8 +62,8 @@ func (app *DesktopApp) Shutdown(ctx context.Context) {
 
 func (app *DesktopApp) GetDefaults() DesktopDefaults {
 	return DesktopDefaults{
-		RulesPath:      filepath.Clean("configs/jd.rules.json"),
-		AutomationPath: filepath.Clean("configs/example.automation.json"),
+		RulesPath:      coreapp.ResolveRuntimePath(filepath.Clean("configs/jd.rules.json")),
+		AutomationPath: coreapp.ResolveRuntimePath(filepath.Clean("configs/example.automation.json")),
 		ProxyAddr:      "127.0.0.1:8899",
 		ProxyOverride:  "localhost;127.0.0.1;<local>",
 	}
@@ -97,60 +94,6 @@ func (app *DesktopApp) InstallCert() (coreapp.Status, error) {
 
 func (app *DesktopApp) UninstallCert() (coreapp.Status, error) {
 	return app.service.UninstallCert()
-}
-
-func (app *DesktopApp) ReadTextFile(path string) (string, error) {
-	return app.service.ReadTextFile(path)
-}
-
-func (app *DesktopApp) WriteTextFile(path string, content string) error {
-	return app.service.WriteTextFile(path, content)
-}
-
-func (app *DesktopApp) ValidateRulesText(content string) RulesValidationResult {
-	var file rules.File
-	if err := json.Unmarshal([]byte(content), &file); err != nil {
-		return RulesValidationResult{Valid: false, Error: err.Error()}
-	}
-	set, err := rules.NewSet(file.Rules, ".")
-	if err != nil {
-		return RulesValidationResult{Valid: false, Error: err.Error()}
-	}
-	return RulesValidationResult{Valid: true, Count: len(set.Rules())}
-}
-
-func (app *DesktopApp) FormatJSON(content string) (string, error) {
-	var value any
-	if err := json.Unmarshal([]byte(content), &value); err != nil {
-		return "", err
-	}
-	formatted, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	return string(formatted), nil
-}
-
-func (app *DesktopApp) SelectJSONFile(title string) (string, error) {
-	if app.ctx == nil {
-		return "", fmt.Errorf("desktop context is not ready")
-	}
-	return runtime.OpenFileDialog(app.ctx, runtime.OpenDialogOptions{
-		Title: title,
-		Filters: []runtime.FileFilter{
-			{DisplayName: "JSON files", Pattern: "*.json"},
-			{DisplayName: "All files", Pattern: "*.*"},
-		},
-	})
-}
-
-func (app *DesktopApp) InspectAutomation(path string) (string, error) {
-	return app.service.InspectAutomation(path)
-}
-
-func (app *DesktopApp) RunAutomation(path string) (coreapp.Status, error) {
-	err := app.service.RunAutomation(path)
-	return app.service.Status(), err
 }
 
 func (app *DesktopApp) StartJDAutomation(options uiauto.CoordCycleOptions) (coreapp.JDAutomationStatus, error) {

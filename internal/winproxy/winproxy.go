@@ -40,17 +40,41 @@ func Enable(server string, override string) error {
 	if override == "" {
 		override = "localhost;127.0.0.1;<local>"
 	}
+	current, err := Read()
+	if err != nil {
+		return err
+	}
+	if matchesEnabledProxy(current, server, override) {
+		return nil
+	}
 
-	if err := regAddDWORD("ProxyEnable", 1); err != nil {
-		return err
+	changed := false
+	if !current.Enabled {
+		if err := regAddDWORD("ProxyEnable", 1); err != nil {
+			return err
+		}
+		changed = true
 	}
-	if err := regAddString("ProxyServer", server); err != nil {
-		return err
+	if current.Server != server {
+		if err := regAddString("ProxyServer", server); err != nil {
+			return err
+		}
+		changed = true
 	}
-	if err := regAddString("ProxyOverride", override); err != nil {
-		return err
+	if current.Override != override {
+		if err := regAddString("ProxyOverride", override); err != nil {
+			return err
+		}
+		changed = true
+	}
+	if !changed {
+		return nil
 	}
 	return notifySettingsChanged()
+}
+
+func matchesEnabledProxy(state State, server, override string) bool {
+	return state.Enabled && state.Server == server && state.Override == override
 }
 
 func Restore(state State) error {
@@ -78,7 +102,15 @@ func SaveState(path string, state State) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, content, 0o600)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, content, 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 func LoadState(path string) (State, error) {
@@ -103,8 +135,11 @@ func regAddDWORD(name string, value int) error {
 
 func regAddString(name string, value string) error {
 	if value == "" {
+		if err := syscmd.Command("reg", "query", internetSettingsKey, "/v", name).Run(); err != nil {
+			return nil
+		}
 		output, err := syscmd.Command("reg", "delete", internetSettingsKey, "/v", name, "/f").CombinedOutput()
-		if err != nil && !strings.Contains(strings.ToLower(string(output)), "unable to find") {
+		if err != nil {
 			return fmt.Errorf("delete %s failed: %w: %s", name, err, strings.TrimSpace(string(output)))
 		}
 		return nil

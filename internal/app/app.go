@@ -35,6 +35,41 @@ type ServeOptions struct {
 	ProxyOverride     string
 }
 
+const (
+	maxMainLogBytes   = 10 << 20
+	maxMainLogBackups = 3
+)
+
+// ResolveRuntimePath resolves a relative resource first from the current
+// working directory and then from the executable directory. Packaged apps can
+// therefore start from shortcuts or shells whose working directory differs
+// from the release directory.
+func ResolveRuntimePath(path string) string {
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	cwd, _ := os.Getwd()
+	executable, _ := os.Executable()
+	return resolveRuntimePathFrom(path, cwd, filepath.Dir(executable))
+}
+
+func resolveRuntimePathFrom(path, cwd, executableDir string) string {
+	for _, baseDir := range []string{cwd, executableDir} {
+		if baseDir == "" {
+			continue
+		}
+		candidate := filepath.Join(baseDir, path)
+		if _, err := os.Stat(candidate); err == nil {
+			absolute, absErr := filepath.Abs(candidate)
+			if absErr == nil {
+				return absolute
+			}
+			return filepath.Clean(candidate)
+		}
+	}
+	return filepath.Clean(path)
+}
+
 func DefaultPaths() (Paths, error) {
 	base, err := os.UserConfigDir()
 	if err != nil {
@@ -61,6 +96,7 @@ func DefaultPaths() (Paths, error) {
 
 func NewLogger(paths Paths) (*log.Logger, func(), error) {
 	logPath := filepath.Join(paths.LogDir, "mini-proxy.log")
+	rotateLogFile(logPath, maxMainLogBytes, maxMainLogBackups)
 	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, nil, err
@@ -68,6 +104,18 @@ func NewLogger(paths Paths) (*log.Logger, func(), error) {
 	logger := log.New(file, "", log.LstdFlags|log.Lmicroseconds)
 	cleanup := func() { _ = file.Close() }
 	return logger, cleanup, nil
+}
+
+func rotateLogFile(path string, maxBytes int64, backups int) {
+	info, err := os.Stat(path)
+	if err != nil || info.Size() < maxBytes || backups < 1 {
+		return
+	}
+	_ = os.Remove(fmt.Sprintf("%s.%d", path, backups))
+	for index := backups - 1; index >= 1; index-- {
+		_ = os.Rename(fmt.Sprintf("%s.%d", path, index), fmt.Sprintf("%s.%d", path, index+1))
+	}
+	_ = os.Rename(path, path+".1")
 }
 
 func Serve(options ServeOptions) error {
@@ -80,7 +128,9 @@ func Serve(options ServeOptions) error {
 		return err
 	}
 	defer cleanup()
+	recoverDanglingSystemProxy(paths, logger)
 
+	options.RulesPath = ResolveRuntimePath(options.RulesPath)
 	ruleSet, err := rules.Load(options.RulesPath)
 	if err != nil {
 		return err
@@ -106,10 +156,15 @@ func Serve(options ServeOptions) error {
 		if err != nil {
 			return err
 		}
+		if proxyPointsToLocalProxy(previousState.Server, server.Addr()) {
+			previousState = winproxy.State{Override: previousState.Override}
+		}
 		if err := winproxy.SaveState(paths.ProxyStatePath, previousState); err != nil {
 			return err
 		}
 		if err := winproxy.Enable(server.Addr(), options.ProxyOverride); err != nil {
+			_ = winproxy.Restore(previousState)
+			_ = os.Remove(paths.ProxyStatePath)
 			return err
 		}
 		defer restoreProxy(paths, logger)
@@ -181,10 +236,18 @@ func EnableSystemProxy(addr string, override string) error {
 	if err != nil {
 		return err
 	}
+	if proxyPointsToLocalProxy(state.Server, addr) {
+		state = winproxy.State{Override: state.Override}
+	}
 	if err := winproxy.SaveState(paths.ProxyStatePath, state); err != nil {
 		return err
 	}
-	return winproxy.Enable(addr, override)
+	if err := winproxy.Enable(addr, override); err != nil {
+		_ = winproxy.Restore(state)
+		_ = os.Remove(paths.ProxyStatePath)
+		return err
+	}
+	return nil
 }
 
 func RestoreSystemProxy() error {
@@ -196,10 +259,14 @@ func RestoreSystemProxy() error {
 	if err != nil {
 		return err
 	}
-	return winproxy.Restore(state)
+	if err := winproxy.Restore(state); err != nil {
+		return err
+	}
+	return os.Remove(paths.ProxyStatePath)
 }
 
 func RunAutomation(path string) error {
+	path = ResolveRuntimePath(path)
 	config, err := uiauto.Load(path)
 	if err != nil {
 		return err
@@ -217,6 +284,7 @@ func RunAutomation(path string) error {
 }
 
 func InspectAutomation(path string) error {
+	path = ResolveRuntimePath(path)
 	config, err := uiauto.Load(path)
 	if err != nil {
 		return err
@@ -239,5 +307,7 @@ func restoreProxy(paths Paths, logger *log.Logger) {
 	}
 	if err := winproxy.Restore(state); err != nil {
 		logger.Printf("restore previous proxy state failed: %v", err)
+		return
 	}
+	_ = os.Remove(paths.ProxyStatePath)
 }

@@ -12,8 +12,6 @@ export function ActivateLicense(arg1:string):Promise<void>;
 
 export function DeactivateLicense():Promise<void>;
 
-export function FormatJSON(arg1:string):Promise<string>;
-
 export function GetDefaults():Promise<main.DesktopDefaults>;
 
 export function GetDeviceID():Promise<string>;
@@ -32,19 +30,11 @@ export function GetSKUList():Promise<sku.Snapshot>;
 
 export function GetStatus():Promise<app.Status>;
 
-export function InspectAutomation(arg1:string):Promise<string>;
-
 export function InstallCert():Promise<app.Status>;
-
-export function ReadTextFile(arg1:string):Promise<string>;
 
 export function ResetSKUList():Promise<sku.Snapshot>;
 
-export function RunAutomation(arg1:string):Promise<app.Status>;
-
 export function SaveNotifyConfig(arg1:notify.Config):Promise<void>;
-
-export function SelectJSONFile(arg1:string):Promise<string>;
 
 export function SetLicenseServerURL(arg1:string):Promise<void>;
 
@@ -60,8 +50,4 @@ export function TestNotify(arg1:notify.Config):Promise<void>;
 
 export function UninstallCert():Promise<app.Status>;
 
-export function ValidateRulesText(arg1:string):Promise<main.RulesValidationResult>;
-
 export function VerifyLicense():Promise<boolean>;
-
-export function WriteTextFile(arg1:string,arg2:string):Promise<void>;

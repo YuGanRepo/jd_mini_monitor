@@ -6,10 +6,10 @@ import (
 	"unsafe"
 )
 
-// diskVolumeSerialWindows reads the volume serial number of the C: drive via
+// volumeSerial reads the volume serial number of the C: drive via
 // the Win32 GetVolumeInformationW API. It mirrors the technique used by the
 // JD extension's deterministic fingerprint.
-func diskVolumeSerialWindows() string {
+func volumeSerial() string {
 	kernel32 := syscall.NewLazyDLL("kernel32.dll")
 	proc := kernel32.NewProc("GetVolumeInformationW")
 

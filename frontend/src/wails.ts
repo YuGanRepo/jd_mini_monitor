@@ -27,12 +27,6 @@ export type StartOptions = {
   proxyOverride: string;
 };
 
-export type RulesValidationResult = {
-  valid: boolean;
-  count: number;
-  error: string;
-};
-
 export type JDAutomationOptions = {
   processName: string;
   windowTitleContains: string;
@@ -121,13 +115,6 @@ type DesktopApi = {
   StopProxy(): Promise<Status>;
   InstallCert(): Promise<Status>;
   UninstallCert(): Promise<Status>;
-  ReadTextFile(path: string): Promise<string>;
-  WriteTextFile(path: string, content: string): Promise<void>;
-  ValidateRulesText(content: string): Promise<RulesValidationResult>;
-  FormatJSON(content: string): Promise<string>;
-  SelectJSONFile(title: string): Promise<string>;
-  InspectAutomation(path: string): Promise<string>;
-  RunAutomation(path: string): Promise<Status>;
   StartJDAutomation(options: JDAutomationOptions): Promise<JDAutomationStatus>;
   StopJDAutomation(): Promise<JDAutomationStatus>;
   GetJDAutomationStatus(): Promise<JDAutomationStatus>;

@@ -129,6 +129,19 @@ func (manager *Manager) InstallTrustedRoot() error {
 	return nil
 }
 
+// EnsureTrustedRoot installs the current root certificate only when its
+// thumbprint is not already present in the current user's trusted root store.
+// The bool result reports whether an installation was performed.
+func (manager *Manager) EnsureTrustedRoot() (bool, error) {
+	if manager.IsTrustedRootInstalled() {
+		return false, nil
+	}
+	if err := manager.InstallTrustedRoot(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (manager *Manager) UninstallTrustedRoot() error {
 	if runtime.GOOS != "windows" {
 		return fmt.Errorf("certificate uninstall is only supported on Windows")

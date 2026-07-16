@@ -3,6 +3,7 @@ package license
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -43,6 +44,24 @@ type serverResponse struct {
 	Signature string        `json:"signature"`
 }
 
+// ServerError is a stable machine-readable rejection returned by the license
+// server. Callers should inspect Code instead of matching localized strings.
+type ServerError struct {
+	Code string
+}
+
+func (err *ServerError) Error() string { return err.Code }
+
+// ErrorCode extracts a server rejection code, or an empty string for network,
+// decoding, and other local errors.
+func ErrorCode(err error) string {
+	var serverErr *ServerError
+	if errors.As(err, &serverErr) {
+		return serverErr.Code
+	}
+	return ""
+}
+
 func (c *Client) post(path string, body any) (serverResponse, error) {
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -72,16 +91,27 @@ func (c *Client) post(path string, body any) (serverResponse, error) {
 // exactly like the extension's applyLicenseStateFromServer.
 func applyResponse(resp serverResponse, key, deviceID string, now time.Time) (State, error) {
 	if resp.Payload == nil || resp.Signature == "" {
-		return State{}, fmt.Errorf("invalid-response")
+		return State{}, &ServerError{Code: "invalid-response"}
 	}
 	if err := VerifySignature(*resp.Payload, resp.Signature); err != nil {
-		return State{}, fmt.Errorf("invalid-signature")
+		return State{}, &ServerError{Code: "invalid-signature"}
 	}
 	if resp.Payload.DeviceID != deviceID {
-		return State{}, fmt.Errorf("device-mismatch")
+		return State{}, &ServerError{Code: "device-mismatch"}
 	}
 	if key != "" && resp.Payload.Key != key {
-		return State{}, fmt.Errorf("key-mismatch")
+		return State{}, &ServerError{Code: "key-mismatch"}
+	}
+	if resp.Payload.Status != "active" {
+		return State{}, &ServerError{Code: "revoked"}
+	}
+	serverTime, serverTimeOK := parseISO(resp.Payload.ServerTime)
+	expiresAt, expiresAtOK := parseISO(resp.Payload.ExpiresAt)
+	if !serverTimeOK || !expiresAtOK {
+		return State{}, &ServerError{Code: "invalid-response"}
+	}
+	if !expiresAt.After(serverTime) {
+		return State{}, &ServerError{Code: "expired"}
 	}
 	return StateFromServer(*resp.Payload, resp.Signature, now), nil
 }
@@ -129,5 +159,5 @@ func serverError(code string) error {
 	if code == "" {
 		code = "unauthorized"
 	}
-	return fmt.Errorf("%s", code)
+	return &ServerError{Code: code}
 }

@@ -74,54 +74,6 @@ type foundWindow struct {
 	pid    uint32
 }
 
-// CoordCycleOptions describes a coordinate-click automation cycle against a target
-// window found by title substring and host process name. Every click position is
-// expressed as a ratio (0-1) of the target window's current width/height, so it
-// keeps working if the window is moved or resized.
-type CoordCycleOptions struct {
-	ProcessName         string  `json:"processName"`
-	WindowTitleContains string  `json:"windowTitleContains"`
-	RepeatCount         int     `json:"repeatCount"`
-	CartTabXRatio       float64 `json:"cartTabXRatio"`
-	CartTabYRatio       float64 `json:"cartTabYRatio"`
-	AllTabXRatio        float64 `json:"allTabXRatio"`
-	AllTabYRatio        float64 `json:"allTabYRatio"`
-	ServiceTabXRatio    float64 `json:"serviceTabXRatio"`
-	ServiceTabYRatio    float64 `json:"serviceTabYRatio"`
-	FirstDelaySeconds   int     `json:"firstDelaySeconds"`
-}
-
-func (options CoordCycleOptions) withDefaults() CoordCycleOptions {
-	if options.ProcessName == "" {
-		options.ProcessName = "WeChatAppEx"
-	}
-	if options.WindowTitleContains == "" {
-		options.WindowTitleContains = "京东"
-	}
-	if options.CartTabXRatio <= 0 {
-		options.CartTabXRatio = 0.70
-	}
-	if options.CartTabYRatio <= 0 {
-		options.CartTabYRatio = 0.95
-	}
-	if options.AllTabXRatio <= 0 {
-		options.AllTabXRatio = 0.10
-	}
-	if options.AllTabYRatio <= 0 {
-		options.AllTabYRatio = 0.108
-	}
-	if options.ServiceTabXRatio <= 0 {
-		options.ServiceTabXRatio = 0.62
-	}
-	if options.ServiceTabYRatio <= 0 {
-		options.ServiceTabYRatio = 0.108
-	}
-	if options.FirstDelaySeconds <= 0 {
-		options.FirstDelaySeconds = 30
-	}
-	return options
-}
-
 // RunCoordCycle brings the target mini program window to the foreground, makes sure
 // it is on the cart page (clicks the cart tab in the bottom nav once up front), then
 // repeats: click the cart tab, click "全部", wait FirstDelaySeconds, click "服务",
@@ -131,6 +83,9 @@ func (options CoordCycleOptions) withDefaults() CoordCycleOptions {
 // between clicks/waits.
 func RunCoordCycle(ctx context.Context, options CoordCycleOptions, logger *log.Logger, onCycle func(cycle int)) error {
 	options = options.withDefaults()
+	if err := ValidateCoordCycleOptions(options); err != nil {
+		return err
+	}
 
 	window, err := findWindow(options.WindowTitleContains, options.ProcessName)
 	if err != nil {
@@ -212,6 +167,9 @@ func RunCoordCycle(ctx context.Context, options CoordCycleOptions, logger *log.L
 // automation instead of failing partway through.
 func CheckWindowAvailable(options CoordCycleOptions) error {
 	options = options.withDefaults()
+	if err := ValidateCoordCycleOptions(options); err != nil {
+		return err
+	}
 	_, err := findWindow(options.WindowTitleContains, options.ProcessName)
 	return err
 }

@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"net"
 	"os"
-	"runtime"
 	"strings"
 )
 
@@ -40,30 +39,27 @@ func DeviceIDOrDefault(fallback string) string {
 func deviceID() string {
 	hostname, err := os.Hostname()
 	if err != nil {
-		hostname = "unknown"
+		hostname = ""
 	}
 	// Normalise: strip domain suffix often appended by corp networks.
 	if idx := strings.IndexByte(hostname, '.'); idx >= 0 {
 		hostname = hostname[:idx]
 	}
 
-	volSerial := volumeSerial()
-	macs := firstMACs(2)
+	return deviceIDFromParts(hostname, volumeSerial(), firstMACs(2))
+}
 
-	raw := strings.ToLower(strings.Join(
-		[]string{hostname, volSerial},
-		"|",
-	))
-
-	// When volume serial is unavailable (non-admin, non-NTFS, non-Windows),
-	// mix in MAC addresses as additional entropy.
-	if volSerial == "" && len(macs) > 0 {
-		raw = strings.ToLower(strings.Join(
-			[]string{hostname, strings.Join(macs, ",")},
-			"|",
-		))
+func deviceIDFromParts(hostname, volSerial string, macs []string) string {
+	hostname = strings.TrimSpace(strings.ToLower(hostname))
+	volSerial = strings.TrimSpace(strings.ToLower(volSerial))
+	if hostname == "" && volSerial == "" && len(macs) == 0 {
+		return ""
 	}
-
+	parts := []string{hostname, volSerial}
+	if volSerial == "" && len(macs) > 0 {
+		parts[1] = strings.ToLower(strings.Join(macs, ","))
+	}
+	raw := strings.Join(parts, "|")
 	digest := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(digest[:16]) // 32 hex chars = 128 bits
 }
@@ -89,13 +85,4 @@ func firstMACs(n int) []string {
 		}
 	}
 	return out
-}
-
-// volumeSerial returns the C: drive volume serial on Windows, empty on other
-// platforms (stub in disk_other.go).
-func volumeSerial() string {
-	if runtime.GOOS != "windows" {
-		return ""
-	}
-	return diskVolumeSerialWindows()
 }
