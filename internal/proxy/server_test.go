@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"mini-proxy/internal/notify"
 	"mini-proxy/internal/quote"
@@ -266,5 +267,57 @@ func TestFilterReportsByQuote(t *testing.T) {
 	}
 	if filtered[1].ItemID != "unmapped" || filtered[2].ItemID != "error" {
 		t.Fatalf("unmapped/error reports were not retained: %+v", filtered)
+	}
+}
+
+func TestEnrichSKUQuotesUpdatesSnapshot(t *testing.T) {
+	notifier, err := notify.New(notify.Config{DiscountRate: 0.97}, nil)
+	if err != nil {
+		t.Fatalf("notify.New() error = %v", err)
+	}
+	store := sku.NewStore()
+	store.Update([]sku.SKU{{ItemID: "high", Name: "白酒*6整箱", FinalPriceCents: 6000}})
+	server := New(Config{SKUStore: store, QuoteMatcher: fakeQuoteMatcher{}, Notifier: notifier})
+	server.enrichSKUQuotes(store.Snapshot().Entries)
+
+	deadline := time.After(2 * time.Second)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("quote enrichment timed out: %+v", store.Snapshot().Entries[0])
+		case <-ticker.C:
+			entry := store.Snapshot().Entries[0]
+			if entry.QuoteStatus != sku.QuoteStatusMatched {
+				continue
+			}
+			if entry.QuoteTotal != 180 || entry.QuoteCost < 58.19 || entry.QuoteCost > 58.21 || entry.QuoteDiff < 121.79 || entry.QuoteDiff > 121.81 {
+				t.Fatalf("quote enrichment = %+v", entry)
+			}
+			return
+		}
+	}
+}
+
+func TestNewEnrichesRestoredSKUSnapshot(t *testing.T) {
+	store := sku.NewStore()
+	store.Update([]sku.SKU{{ItemID: "high", Name: "单瓶", FinalPriceCents: 1000}})
+	_ = New(Config{SKUStore: store, QuoteMatcher: fakeQuoteMatcher{}})
+
+	deadline := time.After(2 * time.Second)
+	for {
+		entry := store.Snapshot().Entries[0]
+		if entry.QuoteStatus == sku.QuoteStatusMatched {
+			if entry.QuoteTotal != 30 || entry.QuoteDiff != 20 {
+				t.Fatalf("restored quote enrichment = %+v", entry)
+			}
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("restored quote enrichment timed out: %+v", entry)
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }

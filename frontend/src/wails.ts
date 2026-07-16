@@ -78,6 +78,16 @@ export type SKUEntry = {
   stockChanged: boolean;
   promoChanged: boolean;
   giftChanged: boolean;
+  quoteStatus?: 'loading' | 'matched' | 'unmatched' | 'error' | string;
+  quoteName?: string;
+  quoteSpec?: string;
+  quotePrice?: number;
+  quoteTotal?: number;
+  quoteCost?: number;
+  quoteDiff?: number;
+  quoteProfitRate?: number;
+  quoteError?: string;
+  quoteUpdatedAt?: string;
   changes?: Array<{
     category: 'price' | 'stock' | 'promo' | 'gift' | string;
     field: string;

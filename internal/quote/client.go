@@ -25,6 +25,8 @@ type Match struct {
 type Diff struct {
 	Amount       float64
 	PricePerUnit float64
+	QuoteTotal   float64
+	CostTotal    float64
 	Spec         string
 	QuoteName    string
 	ProfitRatio  float64
@@ -34,7 +36,7 @@ func CalculateDiff(name string, finalPriceCents int64, discountRate float64, mat
 	if match == nil || finalPriceCents <= 0 {
 		return nil
 	}
-	if discountRate <= 0 {
+	if discountRate <= 0 || discountRate >= 1 {
 		discountRate = 1
 	}
 	perUnit, spec := pickPerUnit(match, name)
@@ -43,16 +45,17 @@ func CalculateDiff(name string, finalPriceCents int64, discountRate float64, mat
 	}
 	divisor := PackageDivisor(name)
 	costPerUnit := float64(finalPriceCents) / 100 * discountRate / float64(divisor)
-	difference := perUnit - costPerUnit
-	if divisor > 1 {
-		difference *= float64(divisor)
-	}
 	totalCost := costPerUnit * float64(divisor)
+	quoteTotal := perUnit * float64(divisor)
+	difference := quoteTotal - totalCost
 	profitRatio := 0.0
 	if totalCost > 0 {
 		profitRatio = difference / totalCost
 	}
-	return &Diff{Amount: difference, PricePerUnit: perUnit, Spec: spec, QuoteName: match.Name, ProfitRatio: profitRatio}
+	return &Diff{
+		Amount: difference, PricePerUnit: perUnit, QuoteTotal: quoteTotal, CostTotal: totalCost,
+		Spec: spec, QuoteName: match.Name, ProfitRatio: profitRatio,
+	}
 }
 
 func pickPerUnit(match *Match, name string) (float64, string) {

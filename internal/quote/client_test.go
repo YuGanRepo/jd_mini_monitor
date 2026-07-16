@@ -58,7 +58,20 @@ func TestCalculateDiffMatchesPackageSemantics(t *testing.T) {
 	if result.Amount < 49.79 || result.Amount > 49.81 {
 		t.Fatalf("diff = %f, want 49.8", result.Amount)
 	}
+	if result.QuoteTotal != 108 || result.CostTotal < 58.19 || result.CostTotal > 58.21 {
+		t.Fatalf("quote/cost totals = %.2f/%.2f, want 108/58.2", result.QuoteTotal, result.CostTotal)
+	}
 	if PackageDivisor("白酒12瓶装") != 12 || PackageDivisor("单瓶") != 1 {
 		t.Fatal("PackageDivisor() mismatch")
+	}
+}
+
+func TestCalculateDiffDisablesInvalidDiscountRate(t *testing.T) {
+	match := &Match{Name: "报价", SinglePrice: 20}
+	for _, rate := range []float64{0, 1, 1.2} {
+		result := CalculateDiff("单瓶", 1000, rate, match)
+		if result == nil || result.CostTotal != 10 || result.Amount != 10 {
+			t.Fatalf("CalculateDiff(rate=%v) = %+v, want cost/diff 10", rate, result)
+		}
 	}
 }

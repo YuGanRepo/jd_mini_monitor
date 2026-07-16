@@ -383,6 +383,17 @@ export namespace sku {
 	    promoChanged: boolean;
 	    giftChanged: boolean;
 	    changes?: Change[];
+	    quoteStatus?: string;
+	    quoteName?: string;
+	    quoteSpec?: string;
+	    quotePrice?: number;
+	    quoteTotal?: number;
+	    quoteCost?: number;
+	    quoteDiff?: number;
+	    quoteProfitRate?: number;
+	    quoteError?: string;
+	    // Go type: time
+	    quoteUpdatedAt?: any;
 	
 	    static createFrom(source: any = {}) {
 	        return new Entry(source);
@@ -424,6 +435,16 @@ export namespace sku {
 	        this.promoChanged = source["promoChanged"];
 	        this.giftChanged = source["giftChanged"];
 	        this.changes = this.convertValues(source["changes"], Change);
+	        this.quoteStatus = source["quoteStatus"];
+	        this.quoteName = source["quoteName"];
+	        this.quoteSpec = source["quoteSpec"];
+	        this.quotePrice = source["quotePrice"];
+	        this.quoteTotal = source["quoteTotal"];
+	        this.quoteCost = source["quoteCost"];
+	        this.quoteDiff = source["quoteDiff"];
+	        this.quoteProfitRate = source["quoteProfitRate"];
+	        this.quoteError = source["quoteError"];
+	        this.quoteUpdatedAt = this.convertValues(source["quoteUpdatedAt"], null);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

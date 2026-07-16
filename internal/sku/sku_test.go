@@ -256,6 +256,24 @@ func TestStoreLoadSnapshot(t *testing.T) {
 	}
 }
 
+func TestStoreApplyQuoteRejectsStalePrice(t *testing.T) {
+	store := NewStore()
+	store.Update([]SKU{{ItemID: "a", Name: "A", FinalPriceCents: 1000}})
+	if store.ApplyQuote("a", 900, QuoteResult{Status: QuoteStatusMatched, Total: 20}) {
+		t.Fatal("ApplyQuote() accepted a stale final price")
+	}
+	if !store.ApplyQuote("a", 1000, QuoteResult{
+		Status: QuoteStatusMatched, Name: "系统行情", Spec: "单瓶",
+		Price: 20, Total: 20, Cost: 9.7, Diff: 10.3, ProfitRate: 10.3 / 9.7,
+	}) {
+		t.Fatal("ApplyQuote() rejected the current final price")
+	}
+	entry := store.Snapshot().Entries[0]
+	if entry.QuoteStatus != QuoteStatusMatched || entry.QuoteTotal != 20 || entry.QuoteCost != 9.7 || entry.QuoteDiff != 10.3 {
+		t.Fatalf("quote metadata = %+v", entry)
+	}
+}
+
 func TestParsePluginCartPayload(t *testing.T) {
 	payload := `{
   "resultData": {"cartInfo": {"vendors": [{

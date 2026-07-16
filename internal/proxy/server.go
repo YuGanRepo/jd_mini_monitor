@@ -82,6 +82,8 @@ type Server struct {
 	skuPersistMu sync.Mutex
 	notifierMu   sync.RWMutex
 	quoteMu      sync.RWMutex
+	quoteRunMu   sync.Mutex
+	quoteRunID   uint64
 }
 
 func New(config Config) *Server {
@@ -124,6 +126,7 @@ func New(config Config) *Server {
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
+	server.enrichSKUQuotes(skuStore.Snapshot().Entries)
 	return server
 }
 
@@ -515,12 +518,14 @@ func (server *Server) SetNotifier(notifier *notify.Notifier) {
 	server.notifierMu.Lock()
 	server.notifier = notifier
 	server.notifierMu.Unlock()
+	server.enrichSKUQuotes(server.skuStore.Snapshot().Entries)
 }
 
 func (server *Server) SetQuoteMatcher(matcher QuoteMatcher) {
 	server.quoteMu.Lock()
 	server.quoteMatcher = matcher
 	server.quoteMu.Unlock()
+	server.enrichSKUQuotes(server.skuStore.Snapshot().Entries)
 }
 
 // notifyPriceChanges pushes a DingTalk notification for the SKUs whose final
@@ -597,6 +602,80 @@ func (server *Server) filterReportsByQuote(notifier *notify.Notifier, reports []
 	return kept
 }
 
+func (server *Server) enrichSKUQuotes(entries []sku.Entry) {
+	server.quoteMu.RLock()
+	matcher := server.quoteMatcher
+	server.quoteMu.RUnlock()
+	if matcher == nil || len(entries) == 0 {
+		return
+	}
+	server.notifierMu.RLock()
+	notifier := server.notifier
+	server.notifierMu.RUnlock()
+	discountRate := 1.0
+	if notifier != nil {
+		discountRate = notifier.DiscountRate()
+	}
+
+	server.quoteRunMu.Lock()
+	server.quoteRunID++
+	runID := server.quoteRunID
+	server.quoteRunMu.Unlock()
+
+	go func() {
+		semaphore := make(chan struct{}, 6)
+		var wait sync.WaitGroup
+		for _, entry := range entries {
+			entry := entry
+			wait.Add(1)
+			go func() {
+				defer wait.Done()
+				semaphore <- struct{}{}
+				match, err := matcher.Match(entry.ItemID, entry.Name)
+				<-semaphore
+
+				result := sku.QuoteResult{}
+				switch {
+				case err != nil:
+					result.Status = sku.QuoteStatusError
+					result.Error = err.Error()
+				case match == nil:
+					result.Status = sku.QuoteStatusUnmatched
+				default:
+					difference := quote.CalculateDiff(entry.Name, entry.FinalPriceCents, discountRate, match)
+					if difference == nil {
+						result.Status = sku.QuoteStatusUnmatched
+					} else {
+						result.Status = sku.QuoteStatusMatched
+						result.Name = difference.QuoteName
+						result.Spec = difference.Spec
+						result.Price = difference.PricePerUnit
+						result.Total = difference.QuoteTotal
+						result.Cost = difference.CostTotal
+						result.Diff = difference.Amount
+						result.ProfitRate = difference.ProfitRatio
+					}
+				}
+				server.quoteRunMu.Lock()
+				current := server.quoteRunID == runID
+				server.quoteRunMu.Unlock()
+				if current {
+					server.skuStore.ApplyQuote(entry.ItemID, entry.FinalPriceCents, result)
+				}
+			}()
+		}
+		wait.Wait()
+		server.quoteRunMu.Lock()
+		current := server.quoteRunID == runID
+		server.quoteRunMu.Unlock()
+		if current {
+			server.skuPersistMu.Lock()
+			server.writeLatestSKUFile()
+			server.skuPersistMu.Unlock()
+		}
+	}()
+}
+
 // setBufferedBody replaces a response body with an in-memory buffer and fixes up
 // the framing so the rewritten response is sent with a definite Content-Length
 // instead of chunked transfer-encoding.
@@ -666,6 +745,7 @@ func (server *Server) extractFromResponse(rule *rules.Rule, response *http.Respo
 		result := server.skuStore.Update(skus)
 		server.writeLatestSKUFile()
 		server.skuPersistMu.Unlock()
+		server.enrichSKUQuotes(server.skuStore.Snapshot().Entries)
 		server.notifyPriceChanges(result.ChangedEntries)
 		server.appendCaptureJSONL("sku-events.jsonl", map[string]any{
 			"time":         time.Now(),

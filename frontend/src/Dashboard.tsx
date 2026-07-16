@@ -337,6 +337,39 @@ export default function Dashboard({ licenseState, licenseBusy, onDeactivateLicen
       ),
     },
     {
+      title: '系统询价',
+      key: 'quote',
+      width: 236,
+      render: (_value, entry) => {
+        if (entry.quoteStatus === 'loading') return <Tag color="processing">询价中</Tag>;
+        if (entry.quoteStatus === 'unmatched') return <Tag>未匹配行情</Tag>;
+        if (entry.quoteStatus === 'error') {
+          return <Tooltip title={entry.quoteError || '服务端询价失败'}><Tag color="error">询价失败</Tag></Tooltip>;
+        }
+        if (entry.quoteStatus !== 'matched') return <Typography.Text type="secondary">—</Typography.Text>;
+        const diff = entry.quoteDiff ?? 0;
+        return (
+          <div>
+            <Space size={4} wrap>
+              <Typography.Text strong>{formatYuanAmount(entry.quoteTotal ?? 0)}</Typography.Text>
+              <Tag color={diff > 0 ? 'green' : diff < 0 ? 'red' : 'default'}>
+                差价{diff >= 0 ? '+' : ''}{formatYuanAmount(diff)}
+              </Tag>
+            </Space>
+            <div>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                折后成本 {formatYuanAmount(entry.quoteCost ?? 0)}
+                {entry.quoteSpec ? ` · ${entry.quoteSpec}` : ''}
+                {(entry.quotePrice ?? 0) > 0 ? ` · 单价 ${formatYuanAmount(entry.quotePrice!)}` : ''}
+                {(entry.quoteProfitRate ?? 0) > 0 ? ` · ${(entry.quoteProfitRate! * 100).toFixed(1)}%` : ''}
+              </Typography.Text>
+            </div>
+            {entry.quoteName && <Typography.Text type="secondary" ellipsis style={{ display: 'block', maxWidth: 220, fontSize: 12 }}>{entry.quoteName}</Typography.Text>}
+          </div>
+        );
+      },
+    },
+    {
       title: '变化',
       key: 'change',
       width: 230,
@@ -504,9 +537,9 @@ export default function Dashboard({ licenseState, licenseBusy, onDeactivateLicen
                 {`已解析 ${skuMeta.parseCount} 次 · 共 ${skuMeta.totalSku} 个 SKU · 当前显示 ${filteredSkuList.length} 个`}
                 {skuMeta.updatedAt ? ` · 更新于 ${new Date(skuMeta.updatedAt).toLocaleTimeString()}` : ''}
               </Typography.Text>
-              <Table size="small" rowKey="itemId" columns={skuColumns} dataSource={filteredSkuList} pagination={{ pageSize: 10, size: 'small', hideOnSinglePage: true }} locale={{ emptyText: <Empty description={skuList.length === 0 ? '暂无 SKU。命中 extract 规则的京东购物车响应会解析并显示在这里。' : '当前筛选条件下没有结果，请放宽条件后再试。'} /> }} scroll={{ x: 560 }} />
+              <Table size="small" rowKey="itemId" columns={skuColumns} dataSource={filteredSkuList} pagination={{ pageSize: 10, size: 'small', hideOnSinglePage: true }} locale={{ emptyText: <Empty description={skuList.length === 0 ? '暂无 SKU。命中 extract 规则的京东购物车响应会解析并显示在这里。' : '当前筛选条件下没有结果，请放宽条件后再试。'} /> }} scroll={{ x: 920 }} />
               <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0, fontSize: 12 }}>
-                价格为「到手价」，含 landedPrice 时按其计算，否则回退到页面价。降/涨标签对比上一次抓取到的到手价。
+                价格为「到手价」，含 landedPrice 时按其计算，否则回退到页面价。系统询价在购物车更新或报价配置变化后异步刷新，不阻塞京东请求。
               </Typography.Paragraph>
             </Card>
           </Col>
@@ -602,6 +635,10 @@ function CardTitle({ color, children }: { color: string; children: React.ReactNo
 
 function formatYuan(cents: number): string {
   return `¥${(cents / 100).toFixed(2)}`;
+}
+
+function formatYuanAmount(yuan: number): string {
+  return `${yuan < 0 ? '-' : ''}¥${Math.abs(yuan).toFixed(2)}`;
 }
 
 function normalizeNotifyConfig(config: NotifyConfig): NotifyConfig {

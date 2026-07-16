@@ -506,6 +506,35 @@ type Entry struct {
 	PromoChanged    bool      `json:"promoChanged"`
 	GiftChanged     bool      `json:"giftChanged"`
 	Changes         []Change  `json:"changes,omitempty"`
+	QuoteStatus     string    `json:"quoteStatus,omitempty"`
+	QuoteName       string    `json:"quoteName,omitempty"`
+	QuoteSpec       string    `json:"quoteSpec,omitempty"`
+	QuotePrice      float64   `json:"quotePrice,omitempty"`
+	QuoteTotal      float64   `json:"quoteTotal,omitempty"`
+	QuoteCost       float64   `json:"quoteCost,omitempty"`
+	QuoteDiff       float64   `json:"quoteDiff,omitempty"`
+	QuoteProfitRate float64   `json:"quoteProfitRate,omitempty"`
+	QuoteError      string    `json:"quoteError,omitempty"`
+	QuoteUpdatedAt  time.Time `json:"quoteUpdatedAt,omitempty"`
+}
+
+const (
+	QuoteStatusLoading   = "loading"
+	QuoteStatusMatched   = "matched"
+	QuoteStatusUnmatched = "unmatched"
+	QuoteStatusError     = "error"
+)
+
+type QuoteResult struct {
+	Status     string
+	Name       string
+	Spec       string
+	Price      float64
+	Total      float64
+	Cost       float64
+	Diff       float64
+	ProfitRate float64
+	Error      string
 }
 
 const (
@@ -580,6 +609,7 @@ func (store *Store) Update(skus []SKU) UpdateResult {
 				LastUpdated:    now,
 				UpdateCount:    1,
 				PrevFinalCents: item.FinalPriceCents,
+				QuoteStatus:    QuoteStatusLoading,
 			}
 			continue
 		}
@@ -593,6 +623,7 @@ func (store *Store) Update(skus []SKU) UpdateResult {
 			PrevFinalCents:  existing.FinalPriceCents,
 			FinalDeltaCents: item.FinalPriceCents - existing.FinalPriceCents,
 			Changes:         changes,
+			QuoteStatus:     QuoteStatusLoading,
 		}
 		for _, change := range changes {
 			switch change.Category {
@@ -615,6 +646,28 @@ func (store *Store) Update(skus []SKU) UpdateResult {
 
 	store.entries = nextEntries
 	return UpdateResult{Parsed: len(skus), Changed: changed, Total: len(store.entries), ChangedEntries: changedEntries}
+}
+
+// ApplyQuote updates display-only quote metadata when the SKU and final price
+// still match the cart snapshot that initiated the quote request.
+func (store *Store) ApplyQuote(itemID string, finalPriceCents int64, result QuoteResult) bool {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	entry, ok := store.entries[itemID]
+	if !ok || entry.FinalPriceCents != finalPriceCents {
+		return false
+	}
+	entry.QuoteStatus = result.Status
+	entry.QuoteName = result.Name
+	entry.QuoteSpec = result.Spec
+	entry.QuotePrice = result.Price
+	entry.QuoteTotal = result.Total
+	entry.QuoteCost = result.Cost
+	entry.QuoteDiff = result.Diff
+	entry.QuoteProfitRate = result.ProfitRate
+	entry.QuoteError = result.Error
+	entry.QuoteUpdatedAt = time.Now()
+	return true
 }
 
 func compareSKU(oldSKU, newSKU SKU) []Change {
