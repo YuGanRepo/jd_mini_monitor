@@ -14,6 +14,7 @@ import {
   InputNumber,
   Layout,
   Row,
+  Segmented,
   Select,
   Space,
   Switch,
@@ -55,6 +56,7 @@ const emptyStatus: Status = {
 const defaultJDOptions: JDAutomationOptions = {
   processName: 'WeChatAppEx',
   windowTitleContains: '京东',
+  inputMode: 'background',
   repeatCount: 1,
   cartTabXRatio: 0.7,
   cartTabYRatio: 0.95,
@@ -251,11 +253,15 @@ export default function Dashboard({ licenseState, licenseBusy, onDeactivateLicen
     setBusy(true);
     try {
       setJdStatus(await api().StartJDAutomation(jdOptions));
-      message.success('京东自动化已启动，运行期间请勿移动鼠标或切换窗口');
+      message.success(
+        jdOptions.inputMode === 'background'
+          ? '京东自动化已在后台启动，可继续使用鼠标和其他窗口'
+          : '京东自动化已启动，运行期间请勿移动鼠标或切换窗口',
+      );
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       message.error(
-        `无法启动：未找到目标窗口，请先手动打开京东小程序（窗口标题包含“${jdOptions.windowTitleContains}”，宿主进程“${jdOptions.processName}”）。详情：${detail}`,
+        `无法启动京东自动化：${detail}。请确认目标窗口标题包含“${jdOptions.windowTitleContains}”，宿主进程为“${jdOptions.processName}”${jdOptions.inputMode === 'background' ? '，且窗口未最小化' : ''}。`,
       );
       try {
         setJdStatus(await api().GetJDAutomationStatus());
@@ -401,13 +407,28 @@ export default function Dashboard({ licenseState, licenseBusy, onDeactivateLicen
             <Card title={(
               <CardTitle color={ACCENT.coral}>
                 京东小程序自动化
-                <Tooltip title="需先手动打开京东小程序窗口。运行期间会把窗口切到前台并操控鼠标，请勿同时移动鼠标或切换窗口。仅在购物车“全部/服务”页签间切换，不会确认订单或提交支付。">
+                <Tooltip title={jdOptions.inputMode === 'background'
+                  ? '需保持京东小程序窗口打开且未最小化，可以被其他窗口遮挡。后台模式不会主动切换前台窗口或移动真实鼠标。仅在购物车“全部/服务”页签间切换。'
+                  : '需先手动打开京东小程序窗口。前台兼容模式会切换窗口并操控鼠标，请勿同时移动鼠标或切换窗口。仅在购物车“全部/服务”页签间切换。'}>
                   <QuestionCircleOutlined aria-label="自动化运行提示" style={{ color: ACCENT.coral, cursor: 'help' }} />
                 </Tooltip>
               </CardTitle>
             )}>
               <Form layout="vertical" size="small" disabled={jdStatus.running || busy}>
                 <Row gutter={12}>
+                  <Col span={24}>
+                    <Form.Item label="操作方式" style={{ marginBottom: 12 }}>
+                      <Segmented
+                        block
+                        value={jdOptions.inputMode}
+                        options={[
+                          { label: '后台静默', value: 'background' },
+                          { label: '前台兼容', value: 'foreground' },
+                        ]}
+                        onChange={(value) => setJdOptions({ ...jdOptions, inputMode: value as JDAutomationOptions['inputMode'] })}
+                      />
+                    </Form.Item>
+                  </Col>
                   <Col span={12}>
                     <Form.Item label="窗口标题包含" style={{ marginBottom: 12 }}>
                       <Input value={jdOptions.windowTitleContains} onChange={(event) => setJdOptions({ ...jdOptions, windowTitleContains: event.target.value })} />

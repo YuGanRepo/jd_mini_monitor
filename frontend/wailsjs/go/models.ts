@@ -489,6 +489,7 @@ export namespace uiauto {
 	export class CoordCycleOptions {
 	    processName: string;
 	    windowTitleContains: string;
+	    inputMode?: string;
 	    repeatCount: number;
 	    cartTabXRatio: number;
 	    cartTabYRatio: number;
@@ -506,6 +507,7 @@ export namespace uiauto {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.processName = source["processName"];
 	        this.windowTitleContains = source["windowTitleContains"];
+	        this.inputMode = source["inputMode"];
 	        this.repeatCount = source["repeatCount"];
 	        this.cartTabXRatio = source["cartTabXRatio"];
 	        this.cartTabYRatio = source["cartTabYRatio"];

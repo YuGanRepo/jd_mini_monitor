@@ -30,6 +30,7 @@ export type StartOptions = {
 export type JDAutomationOptions = {
   processName: string;
   windowTitleContains: string;
+  inputMode: 'foreground' | 'background';
   repeatCount: number;
   cartTabXRatio: number;
   cartTabYRatio: number;

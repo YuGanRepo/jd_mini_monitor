@@ -1,11 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 
 	"mini-proxy/internal/app"
+	"mini-proxy/internal/uiauto"
 )
 
 func main() {
@@ -34,6 +36,8 @@ func main() {
 		err = uiautoRun(os.Args[2:])
 	case "uiauto-inspect":
 		err = uiautoInspect(os.Args[2:])
+	case "uiauto-background-probe":
+		err = uiautoBackgroundProbe(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -90,6 +94,31 @@ func uiautoInspect(args []string) error {
 	return app.InspectAutomation(*configPath)
 }
 
+func uiautoBackgroundProbe(args []string) error {
+	flags := flag.NewFlagSet("uiauto-background-probe", flag.ContinueOnError)
+	processName := flags.String("process", "WeChatAppEx", "target process name")
+	titleContains := flags.String("title-contains", "京东", "target window title substring")
+	xRatio := flags.Float64("x-ratio", 0, "horizontal click ratio within the target window")
+	yRatio := flags.Float64("y-ratio", 0, "vertical click ratio within the target window")
+	candidate := flags.Int("candidate", 0, "ranked target descendant index")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	result, err := uiauto.ProbeBackgroundClick(uiauto.BackgroundProbeOptions{
+		ProcessName:         *processName,
+		WindowTitleContains: *titleContains,
+		XRatio:              *xRatio,
+		YRatio:              *yRatio,
+		CandidateIndex:      *candidate,
+	})
+	content, marshalErr := json.MarshalIndent(result, "", "  ")
+	if marshalErr != nil {
+		return marshalErr
+	}
+	fmt.Println(string(content))
+	return err
+}
+
 func usage() {
 	fmt.Fprintln(os.Stderr, `mini-proxy commands:
   version
@@ -100,5 +129,6 @@ func usage() {
   proxy-on [-addr 127.0.0.1:8899]
   proxy-restore
   uiauto-run [-config configs/example.automation.json]
-  uiauto-inspect [-config configs/example.automation.json]`)
+	uiauto-inspect [-config configs/example.automation.json]
+	uiauto-background-probe -x-ratio 0.10 -y-ratio 0.108 [-candidate 0]`)
 }

@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -34,6 +35,12 @@ var (
 	procKeybdEvent                 = user32.NewProc("keybd_event")
 	procSystemParametersInfoW      = user32.NewProc("SystemParametersInfoW")
 	procSetWindowPos               = user32.NewProc("SetWindowPos")
+	procEnumChildWindows           = user32.NewProc("EnumChildWindows")
+	procGetClassNameW              = user32.NewProc("GetClassNameW")
+	procGetParent                  = user32.NewProc("GetParent")
+	procScreenToClient             = user32.NewProc("ScreenToClient")
+	procGetCursorPos               = user32.NewProc("GetCursorPos")
+	procSendMessageTimeoutW        = user32.NewProc("SendMessageTimeoutW")
 	procOpenProcess                = kernel32.NewProc("OpenProcess")
 	procCloseHandle                = kernel32.NewProc("CloseHandle")
 	procGetCurrentThreadId         = kernel32.NewProc("GetCurrentThreadId")
@@ -56,6 +63,11 @@ const (
 	swpNoSize                     = 0x0001
 	swpNoMove                     = 0x0002
 	swpShowWindow                 = 0x0040
+	wmMouseMove                   = 0x0200
+	wmLButtonDown                 = 0x0201
+	wmLButtonUp                   = 0x0202
+	mkLButton                     = 0x0001
+	smtoAbortIfHung               = 0x0002
 )
 
 // HWND_TOPMOST (-1) / HWND_NOTOPMOST (-2) as uintptr values.
@@ -74,8 +86,215 @@ type foundWindow struct {
 	pid    uint32
 }
 
-// RunCoordCycle brings the target mini program window to the foreground, makes sure
-// it is on the cart page (clicks the cart tab in the bottom nav once up front), then
+type nativePoint struct {
+	X, Y int32
+}
+
+type backgroundCandidate struct {
+	handle      uintptr
+	className   string
+	pid         uint32
+	depth       int
+	rect        windowRect
+	clientPoint nativePoint
+}
+
+// ProbeBackgroundClick sends one click directly to a target window descendant.
+// It never activates the target window and never moves or clicks the system cursor.
+// A successful message delivery only proves that Windows accepted the messages;
+// callers must verify the target application actually changed state.
+func ProbeBackgroundClick(options BackgroundProbeOptions) (BackgroundProbeResult, error) {
+	options = options.withDefaults()
+	if err := ValidateBackgroundProbeOptions(options); err != nil {
+		return BackgroundProbeResult{}, err
+	}
+
+	window, err := findWindow(options.WindowTitleContains, options.ProcessName)
+	if err != nil {
+		return BackgroundProbeResult{}, err
+	}
+	if iconic, _, _ := procIsIconic.Call(window.handle); iconic != 0 {
+		return BackgroundProbeResult{}, fmt.Errorf("target window is minimized; restore it before using background input")
+	}
+
+	point, candidates, err := findBackgroundCandidates(window.handle, window.pid, options.XRatio, options.YRatio)
+	if err != nil {
+		return BackgroundProbeResult{}, err
+	}
+	if options.CandidateIndex >= len(candidates) {
+		return BackgroundProbeResult{}, fmt.Errorf("candidateIndex %d is out of range; found %d candidates", options.CandidateIndex, len(candidates))
+	}
+
+	foregroundBefore, _, _ := procGetForegroundWindow.Call()
+	cursorBefore := getCursorPosition()
+	selected := candidates[options.CandidateIndex]
+	messages := sendBackgroundClick(selected.handle, selected.clientPoint)
+	foregroundAfter, _, _ := procGetForegroundWindow.Call()
+	cursorAfter := getCursorPosition()
+
+	result := BackgroundProbeResult{
+		WindowTitle:      window.title,
+		WindowHandle:     formatHandle(window.handle),
+		ScreenPoint:      ProbePoint{X: int(point.X), Y: int(point.Y)},
+		SelectedIndex:    options.CandidateIndex,
+		Selected:         exportBackgroundCandidate(selected),
+		Candidates:       make([]BackgroundClickCandidate, 0, len(candidates)),
+		Messages:         messages,
+		ForegroundBefore: formatHandle(foregroundBefore),
+		ForegroundAfter:  formatHandle(foregroundAfter),
+		CursorBefore:     ProbePoint{X: int(cursorBefore.X), Y: int(cursorBefore.Y)},
+		CursorAfter:      ProbePoint{X: int(cursorAfter.X), Y: int(cursorAfter.Y)},
+	}
+	for _, candidate := range candidates {
+		result.Candidates = append(result.Candidates, exportBackgroundCandidate(candidate))
+	}
+	for _, message := range messages {
+		if !message.Sent {
+			return result, fmt.Errorf("send %s to %s failed: %s", message.Message, result.Selected.Handle, message.Error)
+		}
+	}
+	return result, nil
+}
+
+func findBackgroundCandidates(handle uintptr, targetPID uint32, xRatio, yRatio float64) (nativePoint, []backgroundCandidate, error) {
+	var targetRect windowRect
+	if ok, _, _ := procGetWindowRect.Call(handle, uintptr(unsafe.Pointer(&targetRect))); ok == 0 {
+		return nativePoint{}, nil, fmt.Errorf("get target window rect failed")
+	}
+	width := targetRect.Right - targetRect.Left
+	height := targetRect.Bottom - targetRect.Top
+	if width <= 0 || height <= 0 {
+		return nativePoint{}, nil, fmt.Errorf("target window has no usable size")
+	}
+	point := nativePoint{
+		X: targetRect.Left + int32(float64(width)*xRatio),
+		Y: targetRect.Top + int32(float64(height)*yRatio),
+	}
+
+	handles := []uintptr{handle}
+	callback := syscall.NewCallback(func(child uintptr, _ uintptr) uintptr {
+		handles = append(handles, child)
+		return 1
+	})
+	procEnumChildWindows.Call(handle, callback, 0)
+
+	candidates := make([]backgroundCandidate, 0, len(handles))
+	for _, candidateHandle := range handles {
+		visible, _, _ := procIsWindowVisible.Call(candidateHandle)
+		if visible == 0 {
+			continue
+		}
+		var rect windowRect
+		if ok, _, _ := procGetWindowRect.Call(candidateHandle, uintptr(unsafe.Pointer(&rect))); ok == 0 || !rectContains(rect, point) {
+			continue
+		}
+		clientPoint := point
+		if ok, _, _ := procScreenToClient.Call(candidateHandle, uintptr(unsafe.Pointer(&clientPoint))); ok == 0 {
+			continue
+		}
+		var pid uint32
+		procGetWindowThreadProcessId.Call(candidateHandle, uintptr(unsafe.Pointer(&pid)))
+		if pid != targetPID {
+			continue
+		}
+		candidates = append(candidates, backgroundCandidate{
+			handle:      candidateHandle,
+			className:   windowClassName(candidateHandle),
+			pid:         pid,
+			depth:       windowDepth(candidateHandle, handle),
+			rect:        rect,
+			clientPoint: clientPoint,
+		})
+	}
+	if len(candidates) == 0 {
+		return point, nil, fmt.Errorf("no visible target window descendant contains the click point")
+	}
+
+	sort.SliceStable(candidates, func(i, j int) bool {
+		iRenderer := strings.Contains(strings.ToLower(candidates[i].className), "renderwidgethost")
+		jRenderer := strings.Contains(strings.ToLower(candidates[j].className), "renderwidgethost")
+		if iRenderer != jRenderer {
+			return iRenderer
+		}
+		if candidates[i].depth != candidates[j].depth {
+			return candidates[i].depth > candidates[j].depth
+		}
+		return rectArea(candidates[i].rect) < rectArea(candidates[j].rect)
+	})
+	return point, candidates, nil
+}
+
+func sendBackgroundClick(handle uintptr, point nativePoint) []BackgroundMessageResult {
+	lParam := uintptr(uint32(uint16(point.X)) | uint32(uint16(point.Y))<<16)
+	return []BackgroundMessageResult{
+		sendBackgroundMessage(handle, wmMouseMove, 0, lParam, "WM_MOUSEMOVE"),
+		sendBackgroundMessage(handle, wmLButtonDown, mkLButton, lParam, "WM_LBUTTONDOWN"),
+		sendBackgroundMessage(handle, wmLButtonUp, 0, lParam, "WM_LBUTTONUP"),
+	}
+}
+
+func sendBackgroundMessage(handle uintptr, message, wParam, lParam uintptr, name string) BackgroundMessageResult {
+	var result uintptr
+	ok, _, callErr := procSendMessageTimeoutW.Call(handle, message, wParam, lParam, smtoAbortIfHung, 1000, uintptr(unsafe.Pointer(&result)))
+	messageResult := BackgroundMessageResult{Message: name, Sent: ok != 0}
+	if ok == 0 {
+		messageResult.Error = callErr.Error()
+	}
+	return messageResult
+}
+
+func exportBackgroundCandidate(candidate backgroundCandidate) BackgroundClickCandidate {
+	return BackgroundClickCandidate{
+		Handle:    formatHandle(candidate.handle),
+		ClassName: candidate.className,
+		ProcessID: candidate.pid,
+		Depth:     candidate.depth,
+		Rect: ProbeRect{
+			Left: candidate.rect.Left, Top: candidate.rect.Top,
+			Right: candidate.rect.Right, Bottom: candidate.rect.Bottom,
+		},
+		ClientPoint: ProbePoint{X: int(candidate.clientPoint.X), Y: int(candidate.clientPoint.Y)},
+	}
+}
+
+func windowClassName(handle uintptr) string {
+	buffer := make([]uint16, 256)
+	length, _, _ := procGetClassNameW.Call(handle, uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)))
+	if length == 0 {
+		return ""
+	}
+	return syscall.UTF16ToString(buffer[:length])
+}
+
+func windowDepth(handle, root uintptr) int {
+	depth := 0
+	for handle != 0 && handle != root {
+		handle, _, _ = procGetParent.Call(handle)
+		depth++
+	}
+	return depth
+}
+
+func getCursorPosition() nativePoint {
+	var point nativePoint
+	procGetCursorPos.Call(uintptr(unsafe.Pointer(&point)))
+	return point
+}
+
+func rectContains(rect windowRect, point nativePoint) bool {
+	return point.X >= rect.Left && point.X < rect.Right && point.Y >= rect.Top && point.Y < rect.Bottom
+}
+
+func rectArea(rect windowRect) int64 {
+	return int64(rect.Right-rect.Left) * int64(rect.Bottom-rect.Top)
+}
+
+func formatHandle(handle uintptr) string {
+	return fmt.Sprintf("0x%X", handle)
+}
+
+// RunCoordCycle makes sure the target mini program is on the cart page (clicks the
+// cart tab in the bottom nav once up front), then
 // repeats: click the cart tab, click "全部", wait FirstDelaySeconds, click "服务",
 // wait a fixed 5s, click "全部" again. When RepeatCount <= 0 the cycle repeats
 // indefinitely until the context is cancelled. onCycle, if non-nil, is called with the
@@ -98,10 +317,13 @@ func RunCoordCycle(ctx context.Context, options CoordCycleOptions, logger *log.L
 		}
 	}
 
-	// Bring the window forward once up front; every click re-asserts foreground
-	// (ensureForeground) in case the user switched windows during a wait.
-	if err := ensureForeground(ctx, window.handle, logf); err != nil {
-		return err
+	if options.InputMode == InputModeForeground {
+		// Every foreground click re-asserts focus in case the user switched windows.
+		if err := ensureForeground(ctx, window.handle, logf); err != nil {
+			return err
+		}
+	} else if iconic, _, _ := procIsIconic.Call(window.handle); iconic != 0 {
+		return fmt.Errorf("target window is minimized; restore it before using background input")
 	}
 	if err := sleepCtx(ctx, 500*time.Millisecond); err != nil {
 		return err
@@ -111,7 +333,7 @@ func RunCoordCycle(ctx context.Context, options CoordCycleOptions, logger *log.L
 	// to detect the current page, so click the cart tab in the bottom nav once up
 	// front (harmless if already on the cart page) and give it time to load before
 	// the 全部/服务 cycling begins.
-	if err := clickAndLog(ctx, window.handle, options.CartTabXRatio, options.CartTabYRatio, "cart tab (ensure cart page)", logf); err != nil {
+	if err := clickAndLog(ctx, window, options.InputMode, options.CartTabXRatio, options.CartTabYRatio, "cart tab (ensure cart page)", logf); err != nil {
 		return err
 	}
 	if err := sleepCtx(ctx, 1500*time.Millisecond); err != nil {
@@ -131,28 +353,28 @@ func RunCoordCycle(ctx context.Context, options CoordCycleOptions, logger *log.L
 		}
 		logf("jd cart cycle %d/%s starting on window %q", cycle, totalLabel, window.title)
 
-		if err := clickAndLog(ctx, window.handle, options.CartTabXRatio, options.CartTabYRatio, "cart tab", logf); err != nil {
+		if err := clickAndLog(ctx, window, options.InputMode, options.CartTabXRatio, options.CartTabYRatio, "cart tab", logf); err != nil {
 			return err
 		}
 		if err := sleepCtx(ctx, 500*time.Millisecond); err != nil {
 			return err
 		}
 
-		if err := clickAndLog(ctx, window.handle, options.AllTabXRatio, options.AllTabYRatio, "all tab", logf); err != nil {
+		if err := clickAndLog(ctx, window, options.InputMode, options.AllTabXRatio, options.AllTabYRatio, "all tab", logf); err != nil {
 			return err
 		}
 		if err := sleepCtx(ctx, time.Duration(options.FirstDelaySeconds)*time.Second); err != nil {
 			return err
 		}
 
-		if err := clickAndLog(ctx, window.handle, options.ServiceTabXRatio, options.ServiceTabYRatio, "service tab", logf); err != nil {
+		if err := clickAndLog(ctx, window, options.InputMode, options.ServiceTabXRatio, options.ServiceTabYRatio, "service tab", logf); err != nil {
 			return err
 		}
 		if err := sleepCtx(ctx, serviceToAllFixedDelaySeconds*time.Second); err != nil {
 			return err
 		}
 
-		if err := clickAndLog(ctx, window.handle, options.AllTabXRatio, options.AllTabYRatio, "all tab", logf); err != nil {
+		if err := clickAndLog(ctx, window, options.InputMode, options.AllTabXRatio, options.AllTabYRatio, "all tab", logf); err != nil {
 			return err
 		}
 
@@ -170,22 +392,59 @@ func CheckWindowAvailable(options CoordCycleOptions) error {
 	if err := ValidateCoordCycleOptions(options); err != nil {
 		return err
 	}
-	_, err := findWindow(options.WindowTitleContains, options.ProcessName)
-	return err
+	window, err := findWindow(options.WindowTitleContains, options.ProcessName)
+	if err != nil {
+		return err
+	}
+	if options.InputMode == InputModeBackground {
+		if iconic, _, _ := procIsIconic.Call(window.handle); iconic != 0 {
+			return fmt.Errorf("target window is minimized; restore it before using background input")
+		}
+	}
+	return nil
 }
 
-func clickAndLog(ctx context.Context, handle uintptr, xRatio, yRatio float64, label string, logf func(format string, args ...any)) error {
+func clickAndLog(ctx context.Context, window foundWindow, inputMode string, xRatio, yRatio float64, label string, logf func(format string, args ...any)) error {
+	if inputMode == InputModeBackground {
+		x, y, targetClass, err := clickBackgroundRatio(ctx, window, xRatio, yRatio)
+		if err != nil {
+			return fmt.Errorf("background click %s failed: %w", label, err)
+		}
+		logf("background clicked %s at (%d, %d) targetClass=%s", label, x, y, targetClass)
+		return nil
+	}
+
 	// Re-assert foreground before every click: coordinate clicks land on whatever
 	// window is on top, so the target must be active first.
-	if err := ensureForeground(ctx, handle, logf); err != nil {
+	if err := ensureForeground(ctx, window.handle, logf); err != nil {
 		return fmt.Errorf("focus window before %s failed: %w", label, err)
 	}
-	x, y, err := clickRatio(handle, xRatio, yRatio)
+	x, y, err := clickRatio(window.handle, xRatio, yRatio)
 	if err != nil {
 		return fmt.Errorf("click %s failed: %w", label, err)
 	}
 	logf("clicked %s at (%d, %d)", label, x, y)
 	return nil
+}
+
+func clickBackgroundRatio(ctx context.Context, window foundWindow, xRatio, yRatio float64) (int, int, string, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, 0, "", err
+	}
+	if iconic, _, _ := procIsIconic.Call(window.handle); iconic != 0 {
+		return 0, 0, "", fmt.Errorf("target window is minimized; restore it before using background input")
+	}
+	point, candidates, err := findBackgroundCandidates(window.handle, window.pid, xRatio, yRatio)
+	if err != nil {
+		return 0, 0, "", err
+	}
+	selected := candidates[0]
+	for _, message := range sendBackgroundClick(selected.handle, selected.clientPoint) {
+		if !message.Sent {
+			return 0, 0, selected.className, fmt.Errorf("send %s to %s failed: %s", message.Message, formatHandle(selected.handle), message.Error)
+		}
+	}
+	return int(point.X), int(point.Y), selected.className, nil
 }
 
 // ensureForeground makes the target window the active foreground window before a
@@ -300,6 +559,7 @@ func clickRatio(handle uintptr, xRatio, yRatio float64) (int, int, error) {
 func findWindow(titleContains, processName string) (foundWindow, error) {
 	var result foundWindow
 	var found bool
+	var resultMinimized bool
 
 	callback := syscall.NewCallback(func(hwnd uintptr, _ uintptr) uintptr {
 		visible, _, _ := procIsWindowVisible.Call(hwnd)
@@ -326,9 +586,17 @@ func findWindow(titleContains, processName string) (foundWindow, error) {
 			}
 		}
 
-		result = foundWindow{handle: hwnd, title: title, pid: pid}
-		found = true
-		return 0
+		iconic, _, _ := procIsIconic.Call(hwnd)
+		minimized := iconic != 0
+		if !found || (resultMinimized && !minimized) {
+			result = foundWindow{handle: hwnd, title: title, pid: pid}
+			found = true
+			resultMinimized = minimized
+		}
+		if !minimized {
+			return 0
+		}
+		return 1
 	})
 
 	procEnumWindows.Call(callback, 0)

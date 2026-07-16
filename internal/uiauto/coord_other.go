@@ -23,3 +23,11 @@ func CheckWindowAvailable(options CoordCycleOptions) error {
 	}
 	return fmt.Errorf("coordinate UI automation is only supported on Windows")
 }
+
+// ProbeBackgroundClick is unsupported outside Windows.
+func ProbeBackgroundClick(options BackgroundProbeOptions) (BackgroundProbeResult, error) {
+	if err := ValidateBackgroundProbeOptions(options.withDefaults()); err != nil {
+		return BackgroundProbeResult{}, err
+	}
+	return BackgroundProbeResult{}, fmt.Errorf("background UI automation is only supported on Windows")
+}
