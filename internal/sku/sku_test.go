@@ -213,3 +213,78 @@ func TestStoreLoadSnapshot(t *testing.T) {
 		t.Fatalf("entry restored incorrectly: %+v", snapshot.Entries[0])
 	}
 }
+
+func TestParsePluginCartPayload(t *testing.T) {
+	payload := `{
+  "resultData": {"cartInfo": {"vendors": [{
+    "vendorId": "88", "shopName": "测试店铺", "sorted": [{"itemType": 1, "item": {
+      "skuId": "100001", "skuName": "测试商品*6", "num": 2,
+      "Price": "120.00", "landedPrice": "99.00", "Discount": "21.00",
+      "pricePrim": "¥120.00", "PriceShow": "¥99.00", "priceDes": "券后", "priceRevert": "¥129.00",
+      "stock": {"stockState": "有货", "stockStateId": 33, "remainNumInt": 12},
+      "cardPromotionFloor": {"discount": "9.5折", "showText": "PLUS专享"},
+      "selectedPromoList": [{"id": "p1", "title": "满100减20"}],
+      "cutPriceT": "已降价", "cut": "5.00",
+      "giftGroupInfosShow": [{"giftInfos": [{"skuId": "g1", "name": "赠品", "giftNum": 2}]}],
+      "skuLabels": {"priceBottom": [{"t": "政府补贴"}]}
+    }}]
+  }]}}
+}`
+	skus, err := ParseCartview([]byte(payload))
+	if err != nil {
+		t.Fatalf("ParseCartview() error = %v", err)
+	}
+	if len(skus) != 1 {
+		t.Fatalf("parsed %d SKUs, want 1", len(skus))
+	}
+	item := skus[0]
+	if item.ItemID != "100001" || item.FinalPriceCents != 9900 || item.PagePriceCents != 12000 || item.DiscountCents != 2100 {
+		t.Fatalf("prices or id not parsed: %+v", item)
+	}
+	if item.RemainNum != 12 || item.StockDesc != "有货" || len(item.SelectedPromos) != 1 || len(item.Gifts) != 1 {
+		t.Fatalf("stock/promo/gift not parsed: %+v", item)
+	}
+	if item.PlusText != "PLUS专享" || item.SubsidyText != "政府补贴" || item.ProductURL == "" || item.CheckoutURL == "" {
+		t.Fatalf("metadata not parsed: %+v", item)
+	}
+}
+
+func TestStoreReplacesSnapshotAndClassifiesChanges(t *testing.T) {
+	store := NewStore()
+	initial := []SKU{
+		{
+			ItemID: "a", Name: "A", PagePriceCents: 12000, FinalPriceCents: 10000, DiscountCents: 2000,
+			StockDesc: "有货", RemainNum: 20, PlusText: "旧优惠",
+			SelectedPromos: []Promo{{ID: "p1", Title: "旧促销"}}, Gifts: []Gift{{ID: "g1", Name: "旧赠品", Num: 1}},
+		},
+		{ItemID: "removed", Name: "Removed", FinalPriceCents: 5000, RemainNum: -1},
+	}
+	if result := store.Update(initial); result.Changed != 0 || len(result.ChangedEntries) != 0 {
+		t.Fatalf("initial snapshot should not report changes: %+v", result)
+	}
+
+	result := store.Update([]SKU{{
+		ItemID: "a", Name: "A", PagePriceCents: 11000, FinalPriceCents: 9000, DiscountCents: 2000,
+		StockDesc: "无货", RemainNum: 2, PlusText: "新优惠",
+		SelectedPromos: []Promo{{ID: "p2", Title: "新促销"}}, Gifts: []Gift{{ID: "g2", Name: "新赠品", Num: 2}},
+	}})
+	if result.Total != 1 || result.Changed != 1 || len(result.ChangedEntries) != 1 {
+		t.Fatalf("replacement update = %+v", result)
+	}
+	entry := result.ChangedEntries[0]
+	if !entry.PriceChanged || !entry.StockChanged || !entry.PromoChanged || !entry.GiftChanged {
+		t.Fatalf("missing change category flags: %+v", entry)
+	}
+	categories := map[string]bool{}
+	for _, change := range entry.Changes {
+		categories[change.Category] = true
+	}
+	for _, category := range []string{CategoryPrice, CategoryStock, CategoryPromo, CategoryGift} {
+		if !categories[category] {
+			t.Fatalf("missing category %q in %+v", category, entry.Changes)
+		}
+	}
+	if snapshot := store.Snapshot(); snapshot.TotalSKU != 1 || snapshot.Entries[0].ItemID != "a" {
+		t.Fatalf("removed SKU remained in snapshot: %+v", snapshot)
+	}
+}

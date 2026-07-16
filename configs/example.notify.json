@@ -1,10 +1,23 @@
 {
-  "enabled": false,
+  "enabled": true,
   "dingtalk": {
+    "enabled": false,
     "webhookUrl": "https://oapi.dingtalk.com/robot/send?access_token=YOUR_ACCESS_TOKEN",
     "secret": "SECxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   },
-  "discountRate": 0.95,
+  "bark": {
+    "enabled": false,
+    "serverUrl": "https://api.day.app",
+    "deviceKey": ""
+  },
+  "categories": { "price": true, "stock": true, "promo": true, "gift": true },
+  "stockChangeThreshold": 5,
+  "showProductUrl": true,
+  "showCheckoutUrl": false,
+  "showAppQrCode": true,
+  "quoteDiffFilterEnabled": false,
+  "quoteDiffThreshold": 0,
+  "discountRate": 0.97,
   "format": "markdown",
   "title": "京东购物车价格变动",
   "template": "**{{.Name}}**\n\n- SKU: `{{.ItemID}}`\n- 现价: ¥{{.FinalYuan}} （原价 ¥{{.PrevYuan}}，{{.DeltaYuan}}）\n- 折后价: **¥{{.DiscountYuan}}**\n- 库存: {{.StockDesc}}"

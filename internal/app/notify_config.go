@@ -12,10 +12,16 @@ import (
 // defaultNotifyConfig returns the disabled, out-of-the-box notification config.
 func defaultNotifyConfig() notify.Config {
 	return notify.Config{
-		Enabled:      false,
-		Format:       notify.FormatText,
-		DiscountRate: 0.95,
-		Title:        "京东购物车价格变动",
+		Enabled:              true,
+		Format:               notify.FormatText,
+		DiscountRate:         0.97,
+		Title:                "京东购物车价格变动",
+		DingTalk:             notify.DingTalkConfig{Enabled: notify.Bool(false)},
+		Bark:                 notify.BarkConfig{ServerURL: "https://api.day.app"},
+		Categories:           &notify.CategoryConfig{Price: true, Stock: true, Promo: true, Gift: true},
+		StockChangeThreshold: 5,
+		ShowProductURL:       true,
+		ShowAppQRCode:        true,
 	}
 }
 
@@ -33,6 +39,14 @@ func LoadNotifyConfig(path string) (notify.Config, error) {
 	if err := json.Unmarshal(content, &config); err != nil {
 		return defaultNotifyConfig(), err
 	}
+	var raw struct {
+		DingTalk map[string]json.RawMessage `json:"dingtalk"`
+	}
+	if json.Unmarshal(content, &raw) == nil && raw.DingTalk != nil {
+		if _, hasEnabled := raw.DingTalk["enabled"]; !hasEnabled && config.DingTalk.WebhookURL != "" {
+			config.DingTalk.Enabled = nil
+		}
+	}
 	return config, nil
 }
 
@@ -45,7 +59,15 @@ func SaveNotifyConfig(path string, config notify.Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // loadNotifier builds a Notifier from the config file at path. On any load or

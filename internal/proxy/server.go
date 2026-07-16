@@ -22,6 +22,7 @@ import (
 
 	"mini-proxy/internal/cert"
 	"mini-proxy/internal/notify"
+	"mini-proxy/internal/quote"
 	"mini-proxy/internal/rules"
 	"mini-proxy/internal/sku"
 )
@@ -49,30 +50,38 @@ type RequestLogEntry struct {
 }
 
 type Config struct {
-	Addr       string
-	Rules      *rules.Set
-	Certs      *cert.Manager
-	Logger     *log.Logger
-	SKUStore   *sku.Store
-	Notifier   *notify.Notifier
-	CaptureDir string
+	Addr         string
+	Rules        *rules.Set
+	Certs        *cert.Manager
+	Logger       *log.Logger
+	SKUStore     *sku.Store
+	Notifier     *notify.Notifier
+	QuoteMatcher QuoteMatcher
+	CaptureDir   string
+}
+
+type QuoteMatcher interface {
+	Match(skuID, name string) (*quote.Match, error)
 }
 
 type Server struct {
-	addr       string
-	rules      *rules.Set
-	certs      *cert.Manager
-	logger     *log.Logger
-	skuStore   *sku.Store
-	notifier   *notify.Notifier
-	captureDir string
-	httpServer *http.Server
-	transport  *http.Transport
+	addr         string
+	rules        *rules.Set
+	certs        *cert.Manager
+	logger       *log.Logger
+	skuStore     *sku.Store
+	notifier     *notify.Notifier
+	quoteMatcher QuoteMatcher
+	captureDir   string
+	httpServer   *http.Server
+	transport    *http.Transport
 
 	logMu        sync.Mutex
 	requestLogs  []RequestLogEntry
 	captureMu    sync.Mutex
 	skuPersistMu sync.Mutex
+	notifierMu   sync.RWMutex
+	quoteMu      sync.RWMutex
 }
 
 func New(config Config) *Server {
@@ -90,13 +99,14 @@ func New(config Config) *Server {
 	}
 
 	server := &Server{
-		addr:       addr,
-		rules:      config.Rules,
-		certs:      config.Certs,
-		logger:     logger,
-		skuStore:   skuStore,
-		notifier:   config.Notifier,
-		captureDir: config.CaptureDir,
+		addr:         addr,
+		rules:        config.Rules,
+		certs:        config.Certs,
+		logger:       logger,
+		skuStore:     skuStore,
+		notifier:     config.Notifier,
+		quoteMatcher: config.QuoteMatcher,
+		captureDir:   config.CaptureDir,
 		transport: &http.Transport{
 			Proxy:                 nil,
 			DialContext:           (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
@@ -501,34 +511,90 @@ func (server *Server) ResetSKUList() {
 	server.writeLatestSKUFile()
 }
 
+func (server *Server) SetNotifier(notifier *notify.Notifier) {
+	server.notifierMu.Lock()
+	server.notifier = notifier
+	server.notifierMu.Unlock()
+}
+
+func (server *Server) SetQuoteMatcher(matcher QuoteMatcher) {
+	server.quoteMu.Lock()
+	server.quoteMatcher = matcher
+	server.quoteMu.Unlock()
+}
+
 // notifyPriceChanges pushes a DingTalk notification for the SKUs whose final
 // price changed on the latest capture. Delivery runs in its own goroutine so a
 // slow or failing webhook never blocks the proxied response. Failures are logged
 // only.
 func (server *Server) notifyPriceChanges(changed []sku.Entry) {
-	if server.notifier == nil || !server.notifier.Enabled() || len(changed) == 0 {
+	server.notifierMu.RLock()
+	notifier := server.notifier
+	server.notifierMu.RUnlock()
+	if notifier == nil || !notifier.Enabled() || len(changed) == 0 {
 		return
 	}
-	changes := make([]notify.Change, 0, len(changed))
+	reports := make([]notify.Report, 0, len(changed))
 	for _, entry := range changed {
-		changes = append(changes, notify.Change{
-			ItemID:     entry.ItemID,
-			Name:       entry.Name,
-			VendorName: entry.VendorName,
-			Num:        entry.Num,
-			StockDesc:  entry.StockDesc,
-			FinalCents: entry.FinalPriceCents,
-			PrevCents:  entry.PrevFinalCents,
-			DeltaCents: entry.FinalDeltaCents,
+		fieldChanges := make([]notify.FieldChange, 0, len(entry.Changes))
+		for _, change := range entry.Changes {
+			fieldChanges = append(fieldChanges, notify.FieldChange{
+				Category: change.Category, Field: change.Field, Old: change.Old, New: change.New,
+				Description: change.Description, OldNumber: change.OldNumber, NewNumber: change.NewNumber, Numeric: change.Numeric,
+			})
+		}
+		reports = append(reports, notify.Report{
+			ItemID: entry.ItemID, Name: entry.Name, VendorName: entry.VendorName, Num: entry.Num,
+			StockDesc: entry.StockDesc, RemainNum: entry.RemainNum,
+			PagePriceCents: entry.PagePriceCents, FinalPriceCents: entry.FinalPriceCents,
+			ProductURL: entry.ProductURL, CheckoutURL: entry.CheckoutURL, Changes: fieldChanges,
 		})
 	}
 	go func() {
-		if err := server.notifier.Notify(changes); err != nil {
-			server.logger.Printf("notify: dingtalk push failed (%d changes): %v", len(changes), err)
+		reports = server.filterReportsByQuote(notifier, reports)
+		if len(reports) == 0 {
+			server.logger.Printf("notify: all changed SKUs were filtered")
 			return
 		}
-		server.logger.Printf("notify: dingtalk push sent for %d price change(s)", len(changes))
+		if err := notifier.NotifyReports(reports); err != nil {
+			server.logger.Printf("notify: push failed (%d reports): %v", len(reports), err)
+			return
+		}
+		server.logger.Printf("notify: push sent for %d changed SKU(s)", len(reports))
 	}()
+}
+
+func (server *Server) filterReportsByQuote(notifier *notify.Notifier, reports []notify.Report) []notify.Report {
+	enabled, threshold := notifier.QuoteFilter()
+	server.quoteMu.RLock()
+	matcher := server.quoteMatcher
+	server.quoteMu.RUnlock()
+	if matcher == nil {
+		return reports
+	}
+	kept := make([]notify.Report, 0, len(reports))
+	for _, report := range reports {
+		match, err := matcher.Match(report.ItemID, report.Name)
+		if err != nil || match == nil {
+			kept = append(kept, report)
+			continue
+		}
+		difference := quote.CalculateDiff(report.Name, report.FinalPriceCents, notifier.DiscountRate(), match)
+		if difference == nil {
+			kept = append(kept, report)
+			continue
+		}
+		report.HasQuote = true
+		report.QuoteName = difference.QuoteName
+		report.QuoteSpec = difference.Spec
+		report.QuotePricePerUnit = difference.PricePerUnit
+		report.QuoteDiff = difference.Amount
+		report.ProfitRatio = difference.ProfitRatio
+		if !enabled || difference.Amount > threshold {
+			kept = append(kept, report)
+		}
+	}
+	return kept
 }
 
 // setBufferedBody replaces a response body with an in-memory buffer and fixes up

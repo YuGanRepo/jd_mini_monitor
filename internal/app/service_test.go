@@ -11,6 +11,7 @@ import (
 
 	"mini-proxy/internal/cert"
 	"mini-proxy/internal/license"
+	"mini-proxy/internal/proxy"
 	"mini-proxy/internal/sku"
 )
 
@@ -153,6 +154,26 @@ func TestStartProxyRejectsWhileStopping(t *testing.T) {
 	}
 }
 
+func TestStartProxyIsIdempotentWhileRunning(t *testing.T) {
+	certManager, err := cert.NewManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("cert.NewManager() error = %v", err)
+	}
+	service := &Service{
+		proxyServer: proxy.New(proxy.Config{Addr: "127.0.0.1:8899"}),
+		certManager: certManager,
+		addr:        "127.0.0.1:8899",
+	}
+
+	status, err := service.StartProxy(ServeOptions{})
+	if err != nil {
+		t.Fatalf("StartProxy() error = %v, want nil", err)
+	}
+	if !status.ProxyRunning {
+		t.Fatal("StartProxy() status should report the existing proxy as running")
+	}
+}
+
 func TestAutoStartProxySkipsUnlicensedDevice(t *testing.T) {
 	service := &Service{
 		licenseStore: license.NewStore(filepath.Join(t.TempDir(), "license-state.json")),
@@ -185,4 +206,27 @@ func TestStopJDAutomationCancelsPendingStart(t *testing.T) {
 		t.Fatalf("test context was canceled unexpectedly: %v", ctx.Err())
 	}
 	service.releaseJDAutomationStart()
+}
+
+func TestNotifyConfigDefaultsAndLegacyMigration(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing.json")
+	defaults, err := LoadNotifyConfig(missing)
+	if err != nil {
+		t.Fatalf("LoadNotifyConfig(default) error = %v", err)
+	}
+	if !defaults.Enabled || defaults.DingTalk.Enabled == nil || *defaults.DingTalk.Enabled || defaults.Categories == nil || !defaults.Categories.Price || defaults.StockChangeThreshold != 5 || defaults.DiscountRate != 0.97 {
+		t.Fatalf("unexpected defaults: %+v", defaults)
+	}
+
+	legacyPath := filepath.Join(t.TempDir(), "notify.json")
+	if err := os.WriteFile(legacyPath, []byte(`{"enabled":true,"dingtalk":{"webhookUrl":"https://example.test/hook"},"discountRate":0.95}`), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	legacy, err := LoadNotifyConfig(legacyPath)
+	if err != nil {
+		t.Fatalf("LoadNotifyConfig(legacy) error = %v", err)
+	}
+	if legacy.DingTalk.Enabled != nil || legacy.DingTalk.WebhookURL == "" {
+		t.Fatalf("legacy DingTalk enablement not preserved: %+v", legacy.DingTalk)
+	}
 }

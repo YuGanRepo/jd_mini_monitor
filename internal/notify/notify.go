@@ -48,15 +48,37 @@ const DefaultMarkdownTemplate = "**{{.Name}}**\n\n" +
 
 // DingTalkConfig holds the target group robot webhook and optional signing secret.
 type DingTalkConfig struct {
+	Enabled    *bool  `json:"enabled,omitempty"`
 	WebhookURL string `json:"webhookUrl"`
 	Secret     string `json:"secret,omitempty"`
+}
+
+type BarkConfig struct {
+	Enabled   bool   `json:"enabled"`
+	ServerURL string `json:"serverUrl"`
+	DeviceKey string `json:"deviceKey"`
+}
+
+type CategoryConfig struct {
+	Price bool `json:"price"`
+	Stock bool `json:"stock"`
+	Promo bool `json:"promo"`
+	Gift  bool `json:"gift"`
 }
 
 // Config is the complete notification + pricing configuration. It is safe to
 // persist as JSON.
 type Config struct {
-	Enabled  bool           `json:"enabled"`
-	DingTalk DingTalkConfig `json:"dingtalk"`
+	Enabled                bool            `json:"enabled"`
+	DingTalk               DingTalkConfig  `json:"dingtalk"`
+	Bark                   BarkConfig      `json:"bark"`
+	Categories             *CategoryConfig `json:"categories,omitempty"`
+	StockChangeThreshold   int             `json:"stockChangeThreshold"`
+	ShowProductURL         bool            `json:"showProductUrl"`
+	ShowCheckoutURL        bool            `json:"showCheckoutUrl"`
+	ShowAppQRCode          bool            `json:"showAppQrCode"`
+	QuoteDiffFilterEnabled bool            `json:"quoteDiffFilterEnabled"`
+	QuoteDiffThreshold     float64         `json:"quoteDiffThreshold"`
 	// DiscountRate is a multiplier applied to the final price to obtain the
 	// "折后价". For example 0.95 means 95折. Values <= 0 or >= 1 disable the
 	// discount (the discounted price equals the final price).
@@ -67,7 +89,8 @@ type Config struct {
 	Title string `json:"title"`
 	// Template is a Go text/template rendered once per changed SKU. When empty a
 	// sensible default for the selected Format is used.
-	Template string `json:"template"`
+	Template  string `json:"template"`
+	DeviceTag string `json:"-"`
 }
 
 // Change is a single SKU whose final price changed on the latest capture.
@@ -141,7 +164,35 @@ func New(config Config, logger *log.Logger) (*Notifier, error) {
 
 // Enabled reports whether notifications are configured to be sent.
 func (n *Notifier) Enabled() bool {
-	return n != nil && n.config.Enabled && strings.TrimSpace(n.config.DingTalk.WebhookURL) != ""
+	return n != nil && n.config.Enabled && (n.dingTalkEnabled() || n.barkEnabled())
+}
+
+func (n *Notifier) dingTalkEnabled() bool {
+	enabled := true
+	if n.config.DingTalk.Enabled != nil {
+		enabled = *n.config.DingTalk.Enabled
+	}
+	return enabled && strings.TrimSpace(n.config.DingTalk.WebhookURL) != ""
+}
+
+func Bool(value bool) *bool {
+	return &value
+}
+
+func (n *Notifier) barkEnabled() bool {
+	return n.config.Bark.Enabled && strings.TrimSpace(n.config.Bark.ServerURL) != "" && strings.TrimSpace(n.config.Bark.DeviceKey) != ""
+}
+
+func (n *Notifier) SetDeviceTag(tag string) {
+	n.config.DeviceTag = strings.TrimSpace(tag)
+}
+
+func (n *Notifier) QuoteFilter() (bool, float64) {
+	return n.config.QuoteDiffFilterEnabled, n.config.QuoteDiffThreshold
+}
+
+func (n *Notifier) DiscountRate() float64 {
+	return n.config.DiscountRate
 }
 
 // discountCents applies the configured discount rate to a final price.
@@ -216,23 +267,15 @@ func (n *Notifier) Notify(changes []Change) error {
 
 // SendTest posts a fixed sample message so users can verify webhook + signing.
 func (n *Notifier) SendTest() error {
-	if strings.TrimSpace(n.config.DingTalk.WebhookURL) == "" {
-		return errors.New("dingtalk webhook url is empty")
+	if !n.dingTalkEnabled() && !n.barkEnabled() {
+		return errors.New("no notification channel is configured")
 	}
-	sample := Change{
-		ItemID:     "100012043978",
-		Name:       "测试商品（Mini Proxy 通知自检）",
-		Num:        1,
-		StockDesc:  "有货",
-		FinalCents: 9900,
-		PrevCents:  12900,
-		DeltaCents: -3000,
+	report := Report{
+		ItemID: "100012043978", Name: "测试商品（Mini Proxy 通知自检）", Num: 1,
+		StockDesc: "有货", RemainNum: 20, PagePriceCents: 12900, FinalPriceCents: 9900,
+		Changes: []FieldChange{{Category: "price", Field: "到手价", Numeric: true, OldNumber: 12900, NewNumber: 9900, Description: "降了 ¥30.00"}},
 	}
-	body, err := n.BuildMessage([]Change{sample})
-	if err != nil {
-		return err
-	}
-	return n.post(body)
+	return n.sendConfigured(n.buildReportBatch([]Report{report}), "Mini Proxy 通知自检")
 }
 
 // post builds the DingTalk payload for the configured format, signs the URL when

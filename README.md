@@ -16,7 +16,9 @@ The Wails window provides:
 - file-based JSON rule loading (default: `configs/jd.rules.json`)
 - JD mini-program automation controls for tab switching cycles
 - JD cart SKU extraction, price-change history, filtering, and persisted snapshots
-- DingTalk text/Markdown notifications with optional signing and templates
+- categorized SKU change detection (price, stock, promotion, and gift)
+- concurrent DingTalk/Bark text or Markdown notifications with thresholds, optional signing, and templates
+- server quote comparison and quote-difference notification filtering
 - server-verified device-bound license activation with a 12-hour offline cache
 - request logs, runtime paths, and latest error/status display
 
@@ -84,6 +86,8 @@ go build -o dist/mini-proxy.exe ./cmd/mini-proxy
 - Wails desktop app for operational control
 - JD cartview SKU extraction and persisted price-change tracking
 - DingTalk price-change notification
+- Bark notification, category switches, stock threshold, batching, and device tags
+- server quote matching with 10-minute cache and difference filtering
 - cancellable coordinate automation for the JD mini-program window
 - signed online license activation with offline cache validation
 
@@ -97,3 +101,5 @@ go build -o dist/mini-proxy.exe ./cmd/mini-proxy
 
 See `docs/feature-completeness.md` for the current release-readiness audit,
 remaining risks, and Windows acceptance checklist.
+See `docs/sku-notification-alignment.md` for the exact parity contract with the
+JD Chrome plugin.

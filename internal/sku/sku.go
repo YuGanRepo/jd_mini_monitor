@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,16 +18,42 @@ import (
 
 // SKU is one normalized cart line extracted from a cartview response.
 type SKU struct {
-	ItemID          string `json:"itemId"`
-	Name            string `json:"name"`
-	VendorID        string `json:"vendorId"`
-	VendorName      string `json:"vendorName"`
-	PagePriceCents  int64  `json:"pagePriceCents"`
-	FinalPriceCents int64  `json:"finalPriceCents"`
-	DiscountCents   int64  `json:"discountCents"`
-	Num             int    `json:"num"`
-	StockCode       int    `json:"stockCode"`
-	StockDesc       string `json:"stockDesc"`
+	ItemID           string  `json:"itemId"`
+	Name             string  `json:"name"`
+	VendorID         string  `json:"vendorId"`
+	VendorName       string  `json:"vendorName"`
+	PagePriceCents   int64   `json:"pagePriceCents"`
+	FinalPriceCents  int64   `json:"finalPriceCents"`
+	DiscountCents    int64   `json:"discountCents"`
+	Num              int     `json:"num"`
+	StockCode        int     `json:"stockCode"`
+	StockDesc        string  `json:"stockDesc"`
+	RemainNum        int     `json:"remainNum"`
+	PricePrim        string  `json:"pricePrim,omitempty"`
+	PriceShow        string  `json:"priceShow,omitempty"`
+	PriceDescription string  `json:"priceDescription,omitempty"`
+	PriceRevert      string  `json:"priceRevert,omitempty"`
+	PlusDiscount     string  `json:"plusDiscount,omitempty"`
+	PlusText         string  `json:"plusText,omitempty"`
+	SelectedPromos   []Promo `json:"selectedPromos,omitempty"`
+	CutPriceText     string  `json:"cutPriceText,omitempty"`
+	CutPriceCents    int64   `json:"cutPriceCents,omitempty"`
+	Gifts            []Gift  `json:"gifts,omitempty"`
+	SubsidyText      string  `json:"subsidyText,omitempty"`
+	ProductURL       string  `json:"productUrl,omitempty"`
+	CheckoutURL      string  `json:"checkoutUrl,omitempty"`
+}
+
+type Promo struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	Type  string `json:"type,omitempty"`
+}
+
+type Gift struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Num  int    `json:"num"`
 }
 
 // flatSku mirrors a single entry in cartInfo.flatSkus (prices are decimal yuan
@@ -93,6 +121,25 @@ type cartviewPayload struct {
 	Data     *struct {
 		CartInfo cartInfo `json:"cartInfo"`
 	} `json:"data"`
+	ResultData *pluginResultData `json:"resultData"`
+}
+
+type pluginResultData struct {
+	CartInfo struct {
+		Vendors []pluginVendor `json:"vendors"`
+	} `json:"cartInfo"`
+}
+
+type pluginVendor struct {
+	ShopName   string         `json:"shopName"`
+	VendorName string         `json:"vendorName"`
+	VendorID   flexibleString `json:"vendorId"`
+	Sorted     []pluginEntry  `json:"sorted"`
+}
+
+type pluginEntry struct {
+	ItemType int            `json:"itemType"`
+	Item     map[string]any `json:"item"`
 }
 
 // ParseCartview parses a raw cartview JSON body into a flat SKU list.
@@ -113,6 +160,9 @@ func ParseCartview(data []byte) ([]SKU, error) {
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return nil, err
 	}
+	if payload.ResultData != nil && len(payload.ResultData.CartInfo.Vendors) > 0 {
+		return fromPluginVendors(payload.ResultData.CartInfo.Vendors), nil
+	}
 
 	info := payload.CartInfo
 	if len(info.FlatSkus) == 0 && len(info.VendorList) == 0 && payload.Data != nil {
@@ -126,6 +176,164 @@ func ParseCartview(data []byte) ([]SKU, error) {
 
 	// 2) Fall back to vendorList.
 	return fromVendorList(info)
+}
+
+func fromPluginVendors(vendors []pluginVendor) []SKU {
+	out := make([]SKU, 0)
+	for _, vendor := range vendors {
+		for _, entry := range vendor.Sorted {
+			if entry.ItemType != 1 || entry.Item == nil {
+				continue
+			}
+			item := entry.Item
+			itemID := mapString(item, "skuId", "Id", "id")
+			if itemID == "" {
+				continue
+			}
+			stock := mapObject(item["stock"])
+			page := decimalYuanValueToCents(firstMapValue(item, "Price"))
+			final := decimalYuanValueToCents(firstMapValue(item, "landedPrice"))
+			if final <= 0 {
+				final = decimalYuanValueToCents(firstMapValue(item, "PriceShow", "priceShow", "priceJd"))
+			}
+			if final <= 0 {
+				final = page
+			}
+			discount := decimalYuanValueToCents(firstMapValue(item, "Discount"))
+			if discount == 0 && page > final {
+				discount = page - final
+			}
+			stockDesc := firstNonEmpty(mapString(stock, "stockState"), mapString(item, "stockState"))
+			stockCode := mapInt(stock, "stockStateId")
+			if stockCode == 0 {
+				stockCode = mapInt(item, "stockStateId")
+			}
+			remainNum := mapIntDefault(stock, -1, "remainNumInt", "remainNum")
+			if remainNum == -1 {
+				remainNum = mapIntDefault(item, -1, "remainNumInt", "remainNum")
+			}
+			name := mapString(item, "skuName", "Name", "name", "title", "wareName")
+			num := mapIntDefault(item, 1, "num", "Num", "count", "Count", "quantity")
+			out = append(out, SKU{
+				ItemID: itemID, Name: name, VendorID: string(vendor.VendorID), VendorName: firstNonEmpty(vendor.ShopName, vendor.VendorName),
+				PagePriceCents: page, FinalPriceCents: final, DiscountCents: discount, Num: num,
+				StockCode: stockCode, StockDesc: stockDesc, RemainNum: remainNum,
+				PricePrim: mapString(item, "pricePrim"), PriceShow: mapString(item, "PriceShow", "priceShow", "priceJd"),
+				PriceDescription: mapString(item, "priceDes"), PriceRevert: mapString(item, "priceRevert"),
+				PlusDiscount:   nestedString(item, "cardPromotionFloor", "discount", "discountPrice"),
+				PlusText:       nestedString(item, "cardPromotionFloor", "showText", "text"),
+				SelectedPromos: collectPromos(item), CutPriceText: mapString(item, "cutPriceT"),
+				CutPriceCents: decimalYuanValueToCents(item["cut"]), Gifts: collectGifts(item),
+				SubsidyText: collectSubsidyText(item), ProductURL: productURL(itemID), CheckoutURL: checkoutURL(itemID, num),
+			})
+		}
+	}
+	return out
+}
+
+func firstMapValue(record map[string]any, keys ...string) any {
+	for _, key := range keys {
+		if value, ok := record[key]; ok && value != nil && strings.TrimSpace(fmt.Sprint(value)) != "" {
+			return value
+		}
+	}
+	return nil
+}
+
+func mapString(record map[string]any, keys ...string) string {
+	value := firstMapValue(record, keys...)
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
+}
+
+func mapObject(value any) map[string]any {
+	object, _ := value.(map[string]any)
+	if object == nil {
+		return map[string]any{}
+	}
+	return object
+}
+
+func mapInt(record map[string]any, keys ...string) int {
+	return mapIntDefault(record, 0, keys...)
+}
+
+func mapIntDefault(record map[string]any, fallback int, keys ...string) int {
+	value := firstMapValue(record, keys...)
+	if value == nil {
+		return fallback
+	}
+	number, err := strconv.ParseFloat(strings.TrimSpace(fmt.Sprint(value)), 64)
+	if err != nil {
+		return fallback
+	}
+	return int(number)
+}
+
+func decimalYuanValueToCents(value any) int64 {
+	if value == nil {
+		return 0
+	}
+	return parseDecimalCents(strings.TrimSpace(fmt.Sprint(value)))
+}
+
+func nestedString(record map[string]any, objectKey string, keys ...string) string {
+	return mapString(mapObject(record[objectKey]), keys...)
+}
+
+func collectPromos(item map[string]any) []Promo {
+	values, _ := item["selectedPromoList"].([]any)
+	out := make([]Promo, 0, len(values))
+	for _, value := range values {
+		promo := mapObject(value)
+		out = append(out, Promo{ID: mapString(promo, "id", "pid", "promoId"), Title: mapString(promo, "title"), Type: mapString(promo, "type")})
+	}
+	return out
+}
+
+func collectGifts(item map[string]any) []Gift {
+	groups, _ := item["giftGroupInfosShow"].([]any)
+	var out []Gift
+	for _, value := range groups {
+		infos, _ := mapObject(value)["giftInfos"].([]any)
+		for _, infoValue := range infos {
+			gift := mapObject(infoValue)
+			out = append(out, Gift{ID: mapString(gift, "id", "skuId", "giftSkuId", "name"), Name: mapString(gift, "name"), Num: mapIntDefault(gift, 1, "giftNum")})
+		}
+	}
+	return out
+}
+
+func collectSubsidyText(item map[string]any) string {
+	priceBottom, _ := mapObject(item["skuLabels"])["priceBottom"].([]any)
+	for _, value := range priceBottom {
+		if text := mapString(mapObject(value), "t", "vt"); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func productURL(itemID string) string {
+	return "https://item.jd.com/" + url.PathEscape(itemID) + ".html"
+}
+
+func checkoutURL(itemID string, count int) string {
+	if count < 1 {
+		count = 1
+	}
+	return fmt.Sprintf("https://trade.m.jd.com/pay?commlist=%s,,%d#/index", url.QueryEscape(itemID), count)
 }
 
 // fromFlatSkus builds the SKU list from cartInfo.flatSkus (prices are decimal yuan).
@@ -171,6 +379,9 @@ func fromFlatSkus(info cartInfo) ([]SKU, error) {
 			Num:             item.Num,
 			StockCode:       stockCode,
 			StockDesc:       stockDesc,
+			RemainNum:       -1,
+			ProductURL:      productURL(itemID),
+			CheckoutURL:     checkoutURL(itemID, item.Num),
 		})
 	}
 	return out, nil
@@ -205,6 +416,9 @@ func fromVendorList(info cartInfo) ([]SKU, error) {
 				Num:             item.Num,
 				StockCode:       item.StockCode,
 				StockDesc:       item.StockDesc,
+				RemainNum:       -1,
+				ProductURL:      productURL(item.ItemID),
+				CheckoutURL:     checkoutURL(item.ItemID, item.Num),
 			})
 		}
 	}
@@ -267,6 +481,28 @@ type Entry struct {
 	PrevFinalCents  int64     `json:"prevFinalCents"`  // final price before the most recent change
 	FinalDeltaCents int64     `json:"finalDeltaCents"` // FinalPriceCents - PrevFinalCents at last change (persists)
 	PriceChanged    bool      `json:"priceChanged"`    // whether the final price changed on the latest capture
+	StockChanged    bool      `json:"stockChanged"`
+	PromoChanged    bool      `json:"promoChanged"`
+	GiftChanged     bool      `json:"giftChanged"`
+	Changes         []Change  `json:"changes,omitempty"`
+}
+
+const (
+	CategoryPrice = "price"
+	CategoryStock = "stock"
+	CategoryPromo = "promo"
+	CategoryGift  = "gift"
+)
+
+type Change struct {
+	Category    string `json:"category"`
+	Field       string `json:"field"`
+	Old         string `json:"old"`
+	New         string `json:"new"`
+	Description string `json:"description,omitempty"`
+	OldNumber   int64  `json:"oldNumber,omitempty"`
+	NewNumber   int64  `json:"newNumber,omitempty"`
+	Numeric     bool   `json:"numeric,omitempty"`
 }
 
 // UpdateResult summarizes what a single Update call did.
@@ -301,8 +537,8 @@ func NewStore() *Store {
 	return &Store{entries: make(map[string]*Entry)}
 }
 
-// Update merges a freshly parsed SKU list into the store, incrementing update
-// counters and recording final-price changes against the previously stored value.
+// Update replaces the current cart snapshot, preserving metadata for items that
+// remain and reporting categorized changes for previously known items.
 func (store *Store) Update(skus []SKU) UpdateResult {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -310,13 +546,14 @@ func (store *Store) Update(skus []SKU) UpdateResult {
 	now := time.Now()
 	store.parseCount++
 	store.updatedAt = now
+	nextEntries := make(map[string]*Entry, len(skus))
 	changed := 0
 	var changedEntries []Entry
 
 	for _, item := range skus {
 		existing, ok := store.entries[item.ItemID]
 		if !ok {
-			store.entries[item.ItemID] = &Entry{
+			nextEntries[item.ItemID] = &Entry{
 				SKU:            item,
 				FirstSeen:      now,
 				LastUpdated:    now,
@@ -326,23 +563,126 @@ func (store *Store) Update(skus []SKU) UpdateResult {
 			continue
 		}
 
-		if existing.FinalPriceCents != item.FinalPriceCents {
-			existing.PrevFinalCents = existing.FinalPriceCents
-			existing.FinalDeltaCents = item.FinalPriceCents - existing.FinalPriceCents
-			existing.PriceChanged = true
-			changed++
-		} else {
-			existing.PriceChanged = false
+		changes := compareSKU(existing.SKU, item)
+		entry := &Entry{
+			SKU:             item,
+			FirstSeen:       existing.FirstSeen,
+			LastUpdated:     now,
+			UpdateCount:     existing.UpdateCount + 1,
+			PrevFinalCents:  existing.FinalPriceCents,
+			FinalDeltaCents: item.FinalPriceCents - existing.FinalPriceCents,
+			Changes:         changes,
 		}
-		existing.SKU = item
-		existing.LastUpdated = now
-		existing.UpdateCount++
-		if existing.PriceChanged {
-			changedEntries = append(changedEntries, *existing)
+		for _, change := range changes {
+			switch change.Category {
+			case CategoryPrice:
+				entry.PriceChanged = true
+			case CategoryStock:
+				entry.StockChanged = true
+			case CategoryPromo:
+				entry.PromoChanged = true
+			case CategoryGift:
+				entry.GiftChanged = true
+			}
+		}
+		nextEntries[item.ItemID] = entry
+		if len(changes) > 0 {
+			changed++
+			changedEntries = append(changedEntries, *entry)
 		}
 	}
 
+	store.entries = nextEntries
 	return UpdateResult{Parsed: len(skus), Changed: changed, Total: len(store.entries), ChangedEntries: changedEntries}
+}
+
+func compareSKU(oldSKU, newSKU SKU) []Change {
+	var changes []Change
+	addNumber := func(category, field string, oldValue, newValue int64, money bool) {
+		if oldValue == newValue {
+			return
+		}
+		description := ""
+		if money {
+			delta := newValue - oldValue
+			trend := "涨了"
+			if delta < 0 {
+				trend = "降了"
+				delta = -delta
+			}
+			description = fmt.Sprintf("%s ¥%.2f", trend, float64(delta)/100)
+		}
+		changes = append(changes, Change{
+			Category: category, Field: field,
+			Old: strconv.FormatInt(oldValue, 10), New: strconv.FormatInt(newValue, 10),
+			Description: description, OldNumber: oldValue, NewNumber: newValue, Numeric: true,
+		})
+	}
+	addText := func(category, field, oldValue, newValue string) {
+		if oldValue != newValue {
+			changes = append(changes, Change{Category: category, Field: field, Old: oldValue, New: newValue})
+		}
+	}
+
+	addNumber(CategoryPrice, "原价", oldSKU.PagePriceCents, newSKU.PagePriceCents, true)
+	addNumber(CategoryPrice, "到手价", oldSKU.FinalPriceCents, newSKU.FinalPriceCents, true)
+	addNumber(CategoryPrice, "优惠额", oldSKU.DiscountCents, newSKU.DiscountCents, true)
+	addText(CategoryPrice, "页面价", oldSKU.PricePrim, newSKU.PricePrim)
+	addText(CategoryPrice, "显示价", oldSKU.PriceShow, newSKU.PriceShow)
+	addText(CategoryPrice, "价格描述", oldSKU.PriceDescription, newSKU.PriceDescription)
+	addText(CategoryPrice, "还原价", oldSKU.PriceRevert, newSKU.PriceRevert)
+
+	addText(CategoryStock, "库存状态", oldSKU.StockDesc, newSKU.StockDesc)
+	if oldSKU.RemainNum != newSKU.RemainNum && !(oldSKU.RemainNum == -1 && newSKU.RemainNum == -1) {
+		addNumber(CategoryStock, "剩余库存", int64(oldSKU.RemainNum), int64(newSKU.RemainNum), false)
+	}
+
+	addText(CategoryPromo, "PLUS专享折扣", oldSKU.PlusDiscount, newSKU.PlusDiscount)
+	addText(CategoryPromo, "PLUS专享描述", oldSKU.PlusText, newSKU.PlusText)
+	compareNamedSet(&changes, CategoryPromo, "促销", promoMap(oldSKU.SelectedPromos), promoMap(newSKU.SelectedPromos))
+	addText(CategoryPromo, "降价提示", oldSKU.CutPriceText, newSKU.CutPriceText)
+	addNumber(CategoryPromo, "降价幅度", oldSKU.CutPriceCents, newSKU.CutPriceCents, true)
+	addText(CategoryPromo, "补贴信息", oldSKU.SubsidyText, newSKU.SubsidyText)
+
+	compareNamedSet(&changes, CategoryGift, "赠品", giftMap(oldSKU.Gifts), giftMap(newSKU.Gifts))
+	return changes
+}
+
+func promoMap(values []Promo) map[string]string {
+	out := make(map[string]string, len(values))
+	for _, value := range values {
+		out[firstNonEmpty(value.ID, value.Title)] = value.Title
+	}
+	return out
+}
+
+func giftMap(values []Gift) map[string]string {
+	out := make(map[string]string, len(values))
+	for _, value := range values {
+		text := value.Name
+		if value.Num > 1 {
+			text += fmt.Sprintf(" x%d", value.Num)
+		}
+		out[firstNonEmpty(value.ID, value.Name)] = text
+	}
+	return out
+}
+
+func compareNamedSet(changes *[]Change, category, label string, oldValues, newValues map[string]string) {
+	for key, value := range newValues {
+		oldValue, ok := oldValues[key]
+		switch {
+		case !ok:
+			*changes = append(*changes, Change{Category: category, Field: "新增" + label, New: value})
+		case oldValue != value:
+			*changes = append(*changes, Change{Category: category, Field: label + "变更", Old: oldValue, New: value})
+		}
+	}
+	for key, value := range oldValues {
+		if _, ok := newValues[key]; !ok {
+			*changes = append(*changes, Change{Category: category, Field: "移除" + label, Old: value})
+		}
+	}
 }
 
 // Snapshot returns a copy of every stored SKU, most recently updated first.

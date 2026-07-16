@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { QuestionCircleOutlined } from '@ant-design/icons';
 import {
   Alert,
   App as AntApp,
@@ -18,6 +19,7 @@ import {
   Switch,
   Table,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -71,9 +73,17 @@ const emptyJDStatus: JDAutomationStatus = {
 };
 
 const defaultNotifyConfig: NotifyConfig = {
-  enabled: false,
-  dingtalk: { webhookUrl: '', secret: '' },
-  discountRate: 0.95,
+  enabled: true,
+  dingtalk: { enabled: false, webhookUrl: '', secret: '' },
+  bark: { enabled: false, serverUrl: 'https://api.day.app', deviceKey: '' },
+  categories: { price: true, stock: true, promo: true, gift: true },
+  stockChangeThreshold: 5,
+  showProductUrl: true,
+  showCheckoutUrl: false,
+  showAppQrCode: true,
+  quoteDiffFilterEnabled: false,
+  quoteDiffThreshold: 0,
+  discountRate: 0.97,
   format: 'markdown',
   title: '京东购物车价格变动',
   template: '',
@@ -222,7 +232,7 @@ export default function Dashboard({ licenseState, licenseBusy, onDeactivateLicen
   async function saveNotifyConfig() {
     await runTask(async () => {
       await api().SaveNotifyConfig(notifyConfig);
-    }, '通知配置已保存（下次启动代理时生效）');
+    }, '通知配置已保存并立即生效');
   }
 
   async function testNotify() {
@@ -323,12 +333,15 @@ export default function Dashboard({ licenseState, licenseBusy, onDeactivateLicen
     {
       title: '变化',
       key: 'change',
-      width: 116,
-      render: (_value, entry) => entry.priceChanged ? (
-        <Tag color={entry.finalDeltaCents < 0 ? 'green' : 'red'}>
-          {entry.finalDeltaCents < 0 ? '降' : '涨'}{formatYuan(Math.abs(entry.finalDeltaCents))}
-        </Tag>
-      ) : <Typography.Text type="secondary">—</Typography.Text>,
+      width: 230,
+      render: (_value, entry) => {
+        const tags: React.ReactNode[] = [];
+        if (entry.priceChanged) tags.push(<Tag key="price" color={entry.finalDeltaCents < 0 ? 'green' : 'red'}>价格{entry.finalDeltaCents < 0 ? '降' : '涨'}{formatYuan(Math.abs(entry.finalDeltaCents))}</Tag>);
+        if (entry.stockChanged) tags.push(<Tag key="stock" color="blue">库存</Tag>);
+        if (entry.promoChanged) tags.push(<Tag key="promo" color="gold">优惠</Tag>);
+        if (entry.giftChanged) tags.push(<Tag key="gift" color="purple">赠品</Tag>);
+        return tags.length ? <Space size={[0, 4]} wrap>{tags}</Space> : <Typography.Text type="secondary">—</Typography.Text>;
+      },
     },
     { title: '库存', dataIndex: 'stockDesc', width: 88, render: (value?: string) => value ? <Tag>{value}</Tag> : <Typography.Text type="secondary">—</Typography.Text> },
     { title: '次数', dataIndex: 'updateCount', width: 66, render: (value: number) => `×${value}` },
@@ -385,7 +398,14 @@ export default function Dashboard({ licenseState, licenseBusy, onDeactivateLicen
           </Col>
 
           <Col xs={24} lg={12}>
-            <Card title={<CardTitle color={ACCENT.coral}>京东小程序自动化</CardTitle>}>
+            <Card title={(
+              <CardTitle color={ACCENT.coral}>
+                京东小程序自动化
+                <Tooltip title="需先手动打开京东小程序窗口。运行期间会把窗口切到前台并操控鼠标，请勿同时移动鼠标或切换窗口。仅在购物车“全部/服务”页签间切换，不会确认订单或提交支付。">
+                  <QuestionCircleOutlined aria-label="自动化运行提示" style={{ color: ACCENT.coral, cursor: 'help' }} />
+                </Tooltip>
+              </CardTitle>
+            )}>
               <Form layout="vertical" size="small" disabled={jdStatus.running || busy}>
                 <Row gutter={12}>
                   <Col span={12}>
@@ -424,7 +444,6 @@ export default function Dashboard({ licenseState, licenseBusy, onDeactivateLicen
                 </Tag>
               </Space>
               {jdStatus.lastError && <Alert style={{ marginTop: 12 }} type="error" showIcon message={jdStatus.lastError} />}
-              <Alert style={{ marginTop: 12 }} type="warning" showIcon message="需先手动打开京东小程序窗口。运行期间会把窗口切到前台并操控鼠标，请勿同时移动鼠标或切换窗口。仅在购物车“全部/服务”页签间切换，不会确认订单或提交支付。" />
             </Card>
           </Col>
 
@@ -472,29 +491,54 @@ export default function Dashboard({ licenseState, licenseBusy, onDeactivateLicen
           </Col>
 
           <Col span={24}>
-            <Card title={<CardTitle color={ACCENT.mint}>钉钉通知与折扣</CardTitle>}>
+            <Card title={<CardTitle color={ACCENT.mint}>SKU 变动通知</CardTitle>}>
               <Form layout="vertical" size="small">
                 <Form.Item style={{ marginBottom: 12 }}>
-                  <Space><Switch checked={notifyConfig.enabled} onChange={(checked) => setNotifyConfig({ ...notifyConfig, enabled: checked })} /><span>启用钉钉通知（购物车到手价变动时推送）</span></Space>
-                </Form.Item>
-                <Form.Item label="钉钉机器人 Webhook 地址" style={{ marginBottom: 12 }}>
-                  <Input value={notifyConfig.dingtalk.webhookUrl} placeholder="https://oapi.dingtalk.com/robot/send?access_token=..." onChange={(event) => setNotifyConfig({ ...notifyConfig, dingtalk: { ...notifyConfig.dingtalk, webhookUrl: event.target.value } })} />
-                </Form.Item>
-                <Form.Item label="加签密钥 Secret（可选，机器人开启“加签”时填写）" style={{ marginBottom: 12 }}>
-                  <Input.Password value={notifyConfig.dingtalk.secret ?? ''} placeholder="SECxxxxxxxx" onChange={(event) => setNotifyConfig({ ...notifyConfig, dingtalk: { ...notifyConfig.dingtalk, secret: event.target.value } })} />
+                  <Space><Switch checked={notifyConfig.enabled} onChange={(checked) => setNotifyConfig({ ...notifyConfig, enabled: checked })} /><span>启用 SKU 变动通知</span></Space>
                 </Form.Item>
                 <Row gutter={12}>
                   <Col xs={24} sm={12}>
-                    <Form.Item label="折扣率（0-1，如 0.95=95折；≥1 不打折）" style={{ marginBottom: 12 }}>
-                      <InputNumber style={{ width: '100%' }} min={0} max={1} step={0.01} value={notifyConfig.discountRate} onChange={(value) => setNotifyConfig({ ...notifyConfig, discountRate: Number(value ?? 0) })} />
+                    <Form.Item style={{ marginBottom: 8 }}><Space><Switch checked={notifyConfig.dingtalk.enabled} onChange={(enabled) => setNotifyConfig({ ...notifyConfig, dingtalk: { ...notifyConfig.dingtalk, enabled } })} /><span>启用钉钉</span></Space></Form.Item>
+                    <Form.Item label="钉钉 Webhook" style={{ marginBottom: 12 }}>
+                      <Input value={notifyConfig.dingtalk.webhookUrl} placeholder="https://oapi.dingtalk.com/robot/send?access_token=..." onChange={(event) => setNotifyConfig({ ...notifyConfig, dingtalk: { ...notifyConfig.dingtalk, webhookUrl: event.target.value } })} />
+                    </Form.Item>
+                    <Form.Item label="钉钉加签 Secret" style={{ marginBottom: 12 }}>
+                      <Input.Password value={notifyConfig.dingtalk.secret ?? ''} placeholder="SECxxxxxxxx" onChange={(event) => setNotifyConfig({ ...notifyConfig, dingtalk: { ...notifyConfig.dingtalk, secret: event.target.value } })} />
                     </Form.Item>
                   </Col>
                   <Col xs={24} sm={12}>
-                    <Form.Item label="消息格式" style={{ marginBottom: 12 }}>
-                      <Select value={notifyConfig.format} onChange={(value) => setNotifyConfig({ ...notifyConfig, format: value })} options={[{ value: 'markdown', label: 'Markdown' }, { value: 'text', label: '纯文本' }]} />
+                    <Form.Item style={{ marginBottom: 8 }}><Space><Switch checked={notifyConfig.bark.enabled} onChange={(enabled) => setNotifyConfig({ ...notifyConfig, bark: { ...notifyConfig.bark, enabled } })} /><span>启用 Bark</span></Space></Form.Item>
+                    <Form.Item label="Bark 服务器" style={{ marginBottom: 12 }}>
+                      <Input value={notifyConfig.bark.serverUrl} placeholder="https://api.day.app" onChange={(event) => setNotifyConfig({ ...notifyConfig, bark: { ...notifyConfig.bark, serverUrl: event.target.value } })} />
+                    </Form.Item>
+                    <Form.Item label="Bark Device Key" style={{ marginBottom: 12 }}>
+                      <Input.Password value={notifyConfig.bark.deviceKey} onChange={(event) => setNotifyConfig({ ...notifyConfig, bark: { ...notifyConfig.bark, deviceKey: event.target.value } })} />
                     </Form.Item>
                   </Col>
                 </Row>
+                <Form.Item label="通知类别" style={{ marginBottom: 12 }}>
+                  <Space wrap>
+                    {([['price', '价格'], ['stock', '库存'], ['promo', '优惠'], ['gift', '赠品']] as const).map(([key, label]) => (
+                      <Checkbox key={key} checked={notifyConfig.categories[key]} onChange={(event) => setNotifyConfig({ ...notifyConfig, categories: { ...notifyConfig.categories, [key]: event.target.checked } })}>{label}</Checkbox>
+                    ))}
+                  </Space>
+                </Form.Item>
+                <Row gutter={12}>
+                  <Col xs={24} sm={8}><Form.Item label="库存变化阈值" style={{ marginBottom: 12 }}><InputNumber style={{ width: '100%' }} min={0} step={1} value={notifyConfig.stockChangeThreshold} onChange={(value) => setNotifyConfig({ ...notifyConfig, stockChangeThreshold: Number(value ?? 5) })} /></Form.Item></Col>
+                  <Col xs={24} sm={8}><Form.Item label="折扣系数" style={{ marginBottom: 12 }}><InputNumber style={{ width: '100%' }} min={0.001} max={1} step={0.001} value={notifyConfig.discountRate} onChange={(value) => setNotifyConfig({ ...notifyConfig, discountRate: Number(value ?? 0.97) })} /></Form.Item></Col>
+                  <Col xs={24} sm={8}><Form.Item label="消息格式" style={{ marginBottom: 12 }}><Select value={notifyConfig.format} onChange={(value) => setNotifyConfig({ ...notifyConfig, format: value })} options={[{ value: 'markdown', label: 'Markdown' }, { value: 'text', label: '纯文本' }]} /></Form.Item></Col>
+                </Row>
+                <Row gutter={12}>
+                  <Col xs={24} sm={12}><Form.Item style={{ marginBottom: 12 }}><Space><Switch checked={notifyConfig.quoteDiffFilterEnabled} onChange={(quoteDiffFilterEnabled) => setNotifyConfig({ ...notifyConfig, quoteDiffFilterEnabled })} /><span>启用报价差价过滤</span></Space></Form.Item></Col>
+                  <Col xs={24} sm={12}><Form.Item label="差价阈值（大于才通知）" style={{ marginBottom: 12 }}><InputNumber style={{ width: '100%' }} step={0.01} value={notifyConfig.quoteDiffThreshold} onChange={(value) => setNotifyConfig({ ...notifyConfig, quoteDiffThreshold: Number(value ?? 0) })} /></Form.Item></Col>
+                </Row>
+                <Form.Item label="通知链接" style={{ marginBottom: 12 }}>
+                  <Space wrap>
+                    <Checkbox checked={notifyConfig.showProductUrl} onChange={(event) => setNotifyConfig({ ...notifyConfig, showProductUrl: event.target.checked })}>商品链接</Checkbox>
+                    <Checkbox checked={notifyConfig.showCheckoutUrl} onChange={(event) => setNotifyConfig({ ...notifyConfig, showCheckoutUrl: event.target.checked })}>支付链接</Checkbox>
+                    <Checkbox checked={notifyConfig.showAppQrCode} onChange={(event) => setNotifyConfig({ ...notifyConfig, showAppQrCode: event.target.checked })}>APP&扫码链接</Checkbox>
+                  </Space>
+                </Form.Item>
                 <Form.Item label="标题（仅 Markdown 生效）" style={{ marginBottom: 12 }}>
                   <Input value={notifyConfig.title} placeholder="京东购物车价格变动" onChange={(event) => setNotifyConfig({ ...notifyConfig, title: event.target.value })} />
                 </Form.Item>
@@ -504,9 +548,9 @@ export default function Dashboard({ licenseState, licenseBusy, onDeactivateLicen
               </Form>
               <Space style={{ marginTop: 12 }}>
                 <Button type="primary" loading={busy} onClick={() => void saveNotifyConfig()}>保存配置</Button>
-                <Button loading={busy} onClick={() => void testNotify()}>发送测试消息</Button>
+                <Button loading={busy} onClick={() => void testNotify()}>测试所有已启用渠道</Button>
               </Space>
-              <Alert style={{ marginTop: 12 }} type="info" showIcon message="占位符：{{.Name}} 商品名、{{.ItemID}} SKU、{{.FinalYuan}} 到手价、{{.PrevYuan}} 上次价、{{.DeltaYuan}} 涨跌、{{.DiscountYuan}} 折后价、{{.StockDesc}} 库存。修改后需重新启动代理才会应用到推送。" />
+              <Alert style={{ marginTop: 12 }} type="info" showIcon message="配置保存后立即生效。通知按价格、库存、优惠、赠品分类，每批最多 3 个 SKU；库存数量变化必须严格大于阈值。未匹配报价的商品不受差价过滤影响。" />
             </Card>
           </Col>
 
@@ -543,10 +587,28 @@ function normalizeNotifyConfig(config: NotifyConfig): NotifyConfig {
   return {
     enabled: Boolean(config?.enabled),
     dingtalk: {
+      enabled: config?.dingtalk?.enabled !== false,
       webhookUrl: config?.dingtalk?.webhookUrl ?? '',
       secret: config?.dingtalk?.secret ?? '',
     },
-    discountRate: typeof config?.discountRate === 'number' ? config.discountRate : 0.95,
+    bark: {
+      enabled: config?.bark?.enabled === true,
+      serverUrl: config?.bark?.serverUrl || 'https://api.day.app',
+      deviceKey: config?.bark?.deviceKey ?? '',
+    },
+    categories: {
+      price: config?.categories?.price !== false,
+      stock: config?.categories?.stock !== false,
+      promo: config?.categories?.promo !== false,
+      gift: config?.categories?.gift !== false,
+    },
+    stockChangeThreshold: typeof config?.stockChangeThreshold === 'number' ? config.stockChangeThreshold : 5,
+    showProductUrl: config?.showProductUrl !== false,
+    showCheckoutUrl: config?.showCheckoutUrl === true,
+    showAppQrCode: config?.showAppQrCode !== false,
+    quoteDiffFilterEnabled: config?.quoteDiffFilterEnabled === true,
+    quoteDiffThreshold: typeof config?.quoteDiffThreshold === 'number' ? config.quoteDiffThreshold : 0,
+    discountRate: typeof config?.discountRate === 'number' ? config.discountRate : 0.97,
     format: config?.format || 'markdown',
     title: config?.title || '京东购物车价格变动',
     template: config?.template ?? '',

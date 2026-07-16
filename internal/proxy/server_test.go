@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -12,6 +13,8 @@ import (
 	"strconv"
 	"testing"
 
+	"mini-proxy/internal/notify"
+	"mini-proxy/internal/quote"
 	"mini-proxy/internal/rules"
 	"mini-proxy/internal/sku"
 )
@@ -224,5 +227,44 @@ func TestModifyResponseBodyClearsChunkedEncoding(t *testing.T) {
 	}
 	if got := modified.Header.Get("Content-Length"); got != strconv.Itoa(len(`{"ok":true}`)) {
 		t.Fatalf("Content-Length = %q", got)
+	}
+}
+
+type fakeQuoteMatcher struct{}
+
+func (fakeQuoteMatcher) Match(skuID, _ string) (*quote.Match, error) {
+	switch skuID {
+	case "low":
+		return &quote.Match{Name: "报价", SinglePrice: 20}, nil
+	case "high":
+		return &quote.Match{Name: "报价", SinglePrice: 30}, nil
+	case "error":
+		return nil, errors.New("network")
+	default:
+		return nil, nil
+	}
+}
+
+func TestFilterReportsByQuote(t *testing.T) {
+	notifier, err := notify.New(notify.Config{QuoteDiffFilterEnabled: true, QuoteDiffThreshold: 15, DiscountRate: 1}, nil)
+	if err != nil {
+		t.Fatalf("notify.New() error = %v", err)
+	}
+	server := New(Config{QuoteMatcher: fakeQuoteMatcher{}})
+	reports := []notify.Report{
+		{ItemID: "low", Name: "低差价", FinalPriceCents: 1000},
+		{ItemID: "high", Name: "高差价", FinalPriceCents: 1000},
+		{ItemID: "unmapped", Name: "未映射", FinalPriceCents: 1000},
+		{ItemID: "error", Name: "查询失败", FinalPriceCents: 1000},
+	}
+	filtered := server.filterReportsByQuote(notifier, reports)
+	if len(filtered) != 3 {
+		t.Fatalf("filtered reports = %+v, want high + unmapped + error", filtered)
+	}
+	if filtered[0].ItemID != "high" || !filtered[0].HasQuote || filtered[0].QuoteDiff != 20 {
+		t.Fatalf("high report quote details = %+v", filtered[0])
+	}
+	if filtered[1].ItemID != "unmapped" || filtered[2].ItemID != "error" {
+		t.Fatalf("unmapped/error reports were not retained: %+v", filtered)
 	}
 }

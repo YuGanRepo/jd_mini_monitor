@@ -67,12 +67,26 @@ export type SKUEntry = {
   num: number;
   stockCode: number;
   stockDesc: string;
+  remainNum: number;
   firstSeen: string;
   lastUpdated: string;
   updateCount: number;
   prevFinalCents: number;
   finalDeltaCents: number;
   priceChanged: boolean;
+  stockChanged: boolean;
+  promoChanged: boolean;
+  giftChanged: boolean;
+  changes?: Array<{
+    category: 'price' | 'stock' | 'promo' | 'gift' | string;
+    field: string;
+    old: string;
+    new: string;
+    description?: string;
+    oldNumber?: number;
+    newNumber?: number;
+    numeric?: boolean;
+  }>;
 };
 
 export type SKUSnapshot = {
@@ -83,13 +97,35 @@ export type SKUSnapshot = {
 };
 
 export type NotifyDingTalkConfig = {
+  enabled?: boolean;
   webhookUrl: string;
   secret?: string;
+};
+
+export type NotifyBarkConfig = {
+  enabled: boolean;
+  serverUrl: string;
+  deviceKey: string;
+};
+
+export type NotifyCategoryConfig = {
+  price: boolean;
+  stock: boolean;
+  promo: boolean;
+  gift: boolean;
 };
 
 export type NotifyConfig = {
   enabled: boolean;
   dingtalk: NotifyDingTalkConfig;
+  bark: NotifyBarkConfig;
+  categories: NotifyCategoryConfig;
+  stockChangeThreshold: number;
+  showProductUrl: boolean;
+  showCheckoutUrl: boolean;
+  showAppQrCode: boolean;
+  quoteDiffFilterEnabled: boolean;
+  quoteDiffThreshold: number;
   discountRate: number;
   format: string;
   title: string;

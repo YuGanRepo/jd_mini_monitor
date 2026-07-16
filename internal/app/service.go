@@ -18,6 +18,7 @@ import (
 	"mini-proxy/internal/license"
 	"mini-proxy/internal/notify"
 	"mini-proxy/internal/proxy"
+	"mini-proxy/internal/quote"
 	"mini-proxy/internal/rules"
 	"mini-proxy/internal/sku"
 	"mini-proxy/internal/uiauto"
@@ -64,6 +65,7 @@ type Service struct {
 	addr              string
 	systemProxyActive bool
 	lastError         string
+	notifyConfigMu    sync.Mutex
 
 	jdAutomationCancel        context.CancelFunc
 	jdAutomationDone          chan struct{}
@@ -357,7 +359,12 @@ func (service *Service) SetLicenseServerURL(url string) error {
 	service.mu.Lock()
 	service.licenseServerURL = url
 	service.licenseClient = license.NewClient(url)
+	server := service.proxyServer
 	service.mu.Unlock()
+	if server != nil {
+		state, _ := service.licenseStore.Load()
+		server.SetQuoteMatcher(quote.NewClient(url, state.Key, service.deviceID))
+	}
 	service.setLastError(nil)
 	return nil
 }
@@ -377,13 +384,23 @@ func (service *Service) GetNotifyConfig() (notify.Config, error) {
 // proxy picks up the change on its next start (the notifier is created when the
 // proxy starts, mirroring how rules are loaded).
 func (service *Service) SaveNotifyConfig(config notify.Config) error {
-	if _, err := notify.New(config, service.logger); err != nil {
+	service.notifyConfigMu.Lock()
+	defer service.notifyConfigMu.Unlock()
+	notifier, err := notify.New(config, service.logger)
+	if err != nil {
 		service.setLastError(err)
 		return err
 	}
+	notifier.SetDeviceTag(deviceTag(service.deviceID))
 	if err := SaveNotifyConfig(service.paths.NotifyConfigPath, config); err != nil {
 		service.setLastError(err)
 		return err
+	}
+	service.mu.Lock()
+	server := service.proxyServer
+	service.mu.Unlock()
+	if server != nil {
+		server.SetNotifier(notifier)
 	}
 	service.setLastError(nil)
 	return nil
@@ -397,6 +414,7 @@ func (service *Service) TestNotify(config notify.Config) error {
 		service.setLastError(err)
 		return err
 	}
+	notifier.SetDeviceTag(deviceTag(service.deviceID))
 	if err := notifier.SendTest(); err != nil {
 		service.setLastError(err)
 		return err
@@ -428,7 +446,11 @@ func (service *Service) StartProxy(options ServeOptions) (Status, error) {
 		service.mu.Unlock()
 		return service.Status(), fmt.Errorf("proxy is still stopping")
 	}
-	if service.proxyServer != nil || service.proxyStarting {
+	if service.proxyServer != nil {
+		service.mu.Unlock()
+		return service.Status(), nil
+	}
+	if service.proxyStarting {
 		service.mu.Unlock()
 		return service.Status(), fmt.Errorf("proxy is already running")
 	}
@@ -468,13 +490,14 @@ func (service *Service) StartProxy(options ServeOptions) (Status, error) {
 	}
 
 	proxyServer := proxy.New(proxy.Config{
-		Addr:       options.Addr,
-		Rules:      ruleSet,
-		Certs:      service.certManager,
-		Logger:     service.logger,
-		SKUStore:   service.skuStore,
-		Notifier:   loadNotifier(service.paths.NotifyConfigPath, service.logger),
-		CaptureDir: filepath.Join(service.paths.LogDir, "intercepts"),
+		Addr:         options.Addr,
+		Rules:        ruleSet,
+		Certs:        service.certManager,
+		Logger:       service.logger,
+		SKUStore:     service.skuStore,
+		Notifier:     service.loadNotifierWithDeviceTag(),
+		QuoteMatcher: service.newQuoteMatcher(),
+		CaptureDir:   filepath.Join(service.paths.LogDir, "intercepts"),
 	})
 	listener, err := net.Listen("tcp", proxyServer.Addr())
 	if err != nil {
@@ -526,6 +549,29 @@ func (service *Service) StartProxy(options ServeOptions) (Status, error) {
 	}()
 
 	return service.Status(), nil
+}
+
+func (service *Service) newQuoteMatcher() *quote.Client {
+	state, _ := service.licenseStore.Load()
+	return quote.NewClient(service.GetLicenseServerURL(), state.Key, service.deviceID)
+}
+
+func (service *Service) loadNotifierWithDeviceTag() *notify.Notifier {
+	service.notifyConfigMu.Lock()
+	defer service.notifyConfigMu.Unlock()
+	notifier := loadNotifier(service.paths.NotifyConfigPath, service.logger)
+	if notifier != nil {
+		notifier.SetDeviceTag(deviceTag(service.deviceID))
+	}
+	return notifier
+}
+
+func deviceTag(deviceID string) string {
+	deviceID = strings.TrimSpace(deviceID)
+	if len(deviceID) <= 8 {
+		return deviceID
+	}
+	return deviceID[len(deviceID)-8:]
 }
 
 func (service *Service) StopProxy(ctx context.Context) (Status, error) {
