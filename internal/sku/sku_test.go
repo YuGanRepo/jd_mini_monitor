@@ -98,6 +98,48 @@ func TestParseCartviewDataWrapper(t *testing.T) {
 	}
 }
 
+func TestParseCartviewFlatSkusUsesVendorLandedPrice(t *testing.T) {
+	payload := `{
+	"cartInfo": {
+		"flatSkus": {
+			"uuid": {
+				"itemId": "100057489119",
+				"itemName": "测试商品",
+				"price": "13239.00",
+				"itemNum": 1,
+				"vendorId": "8880"
+			}
+		},
+		"vendorList": [{
+			"baseInfo": {"vendorId": "8880", "vendorName": "京东自营"},
+			"items": [{
+				"itemId": "100057489119",
+				"itemName": "测试商品",
+				"price": "1323900",
+				"landedPrice": "1310661"
+			}]
+		}]
+	}
+}`
+	skus, err := ParseCartview([]byte(payload))
+	if err != nil {
+		t.Fatalf("ParseCartview() error = %v", err)
+	}
+	if len(skus) != 1 {
+		t.Fatalf("parsed %d SKUs, want 1", len(skus))
+	}
+	item := skus[0]
+	if item.PagePriceCents != 1323900 {
+		t.Fatalf("page price = %d, want 1323900", item.PagePriceCents)
+	}
+	if item.FinalPriceCents != 1310661 {
+		t.Fatalf("final price = %d, want landedPrice 1310661", item.FinalPriceCents)
+	}
+	if item.DiscountCents != 13239 {
+		t.Fatalf("discount = %d, want 13239", item.DiscountCents)
+	}
+}
+
 func TestParseCartviewVendorListFallback(t *testing.T) {
 	// vendorList only (no flatSkus), cent-format prices.
 	vendorOnly := `{

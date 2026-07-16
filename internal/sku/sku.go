@@ -146,7 +146,8 @@ type pluginEntry struct {
 //
 // Strategy (order of preference):
 //  1. cartInfo.flatSkus — always present and covers every cart line (not paginated).
-//     Prices here are decimal-yuan strings like "13239.00".
+//     Prices here are decimal-yuan strings like "13239.00". Matching vendorList
+//     entries enrich these rows with landedPrice, which is the actual final price.
 //  2. cartInfo.vendorList[*].items — fallback (paginated, may be incomplete).
 //     Prices here are integer-cent strings like "1323900".
 //
@@ -340,9 +341,15 @@ func checkoutURL(itemID string, count int) string {
 func fromFlatSkus(info cartInfo) ([]SKU, error) {
 	// Build a vendorID→name lookup from vendorList to decorate flat entries.
 	vendorNameByID := map[string]string{}
+	vendorItemByID := map[string]cartItem{}
 	for _, v := range info.VendorList {
 		if vid := v.BaseInfo.VendorID; vid != "" {
 			vendorNameByID[vid] = v.BaseInfo.VendorName
+		}
+		for _, item := range v.Items {
+			if strings.TrimSpace(item.ItemID) != "" {
+				vendorItemByID[item.ItemID] = item
+			}
 		}
 	}
 
@@ -353,10 +360,24 @@ func fromFlatSkus(info cartInfo) ([]SKU, error) {
 		if strings.TrimSpace(itemID) == "" {
 			continue
 		}
-		// flatSkus price is decimal yuan; multiply by 100 to get cents.
+		// flatSkus.price is the page price in decimal yuan. vendorList uses
+		// integer cents and carries landedPrice, the price JD labels 到手价.
 		page := parseDecimalCents(string(item.Price))
-		// flatSkus has no landedPrice separate from price — use price as final.
 		final := page
+		if vendorItem, ok := vendorItemByID[itemID]; ok {
+			if vendorPage := parseIntegerCents(vendorItem.Price); vendorPage > 0 {
+				page = vendorPage
+			}
+			if landedPrice := parseIntegerCents(vendorItem.LandedPrice); landedPrice > 0 {
+				final = landedPrice
+			} else {
+				final = page
+			}
+		}
+		discount := page - final
+		if discount < 0 {
+			discount = 0
+		}
 		stockCode := item.StockCode
 		stockDesc := item.StockDesc
 		if stockCode == 0 && item.IsNoCheck {
@@ -375,7 +396,7 @@ func fromFlatSkus(info cartInfo) ([]SKU, error) {
 			VendorName:      vendorName,
 			PagePriceCents:  page,
 			FinalPriceCents: final,
-			DiscountCents:   0, // flatSkus carries no discount info
+			DiscountCents:   discount,
 			Num:             item.Num,
 			StockCode:       stockCode,
 			StockDesc:       stockDesc,
