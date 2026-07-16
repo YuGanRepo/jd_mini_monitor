@@ -184,16 +184,15 @@ func TestNotifyReportsSendsQuoteOnlyReportWithTitleInBody(t *testing.T) {
 	defer server.Close()
 
 	notifier, err := New(Config{
-		Enabled:  true,
-		Format:   FormatMarkdown,
-		Title:    "京东小程序通知",
+		Enabled: true, Format: FormatMarkdown, Title: "京东小程序通知",
+		ShowProductURL: true, ShowAppQRCode: true,
 		DingTalk: DingTalkConfig{Enabled: Bool(true), WebhookURL: server.URL},
 	}, nil)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
 	report := Report{
-		ItemID: "1", Name: "商品", FinalPriceCents: 1000,
+		ItemID: "1", Name: "商品", FinalPriceCents: 1000, ProductURL: "https://item.jd.com/1.html",
 		HasQuote: true, QuoteTriggered: true, QuoteName: "系统行情", QuoteSpec: "单瓶",
 		QuotePricePerUnit: 20, QuoteTotal: 20, QuoteCost: 9, QuoteDiff: 11,
 	}
@@ -202,8 +201,22 @@ func TestNotifyReportsSendsQuoteOnlyReportWithTitleInBody(t *testing.T) {
 	}
 	markdown, _ := received["markdown"].(map[string]any)
 	body, _ := markdown["text"].(string)
-	if !strings.Contains(body, "京东小程序通知") || !strings.Contains(body, "报价对比") || !strings.Contains(body, "差价：+11.00") {
+	if strings.Count(body, "京东小程序通知") != 1 || !strings.Contains(body, "报价对比") || !strings.Contains(body, "+11.00") {
 		t.Fatalf("quote-only markdown body missing title or quote details: %s", body)
+	}
+	for _, want := range []string{
+		"### 商品\n\n",
+		"**页面价：**",
+		"**到手价：** <font color=\"#FF0000\">**¥10.00**</font>",
+		"\n\n**报价对比：**",
+		"<font color=\"#FF0000\">**+11.00**</font>",
+		"\n\n---\n\n商品链接：[https://item.jd.com/1.html](https://item.jd.com/1.html)",
+		"\n\nAPP&扫码：[https://www.axureshow.com/project/uaSlvkaG/?skuId=1](https://www.axureshow.com/project/uaSlvkaG/?skuId=1)",
+		"\n\n* 检测时间：",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("quote markdown missing %q:\n%s", want, body)
+		}
 	}
 }
 

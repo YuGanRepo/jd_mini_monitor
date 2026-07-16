@@ -135,14 +135,10 @@ func (n *Notifier) buildReportBatch(reports []Report) string {
 		separator = "\n\n---\n\n"
 	}
 	body := strings.Join(sections, separator)
-	title := strings.TrimSpace(n.config.Title)
-	if title == "" {
-		title = "京东购物车价格变动"
-	}
 	if n.config.Format == FormatMarkdown {
-		body = "## " + title + "\n\n" + body
+		body += "\n\n* 检测时间：" + n.now().Format("2006-01-02 15:04:05")
 	} else {
-		body = "【" + title + "】\n" + body
+		body += "\n检测时间：" + n.now().Format("2006-01-02 15:04:05")
 	}
 	if n.config.DeviceTag != "" {
 		if n.config.Format == FormatMarkdown {
@@ -182,7 +178,11 @@ func (n *Notifier) buildReport(report Report) string {
 	if report.RemainNum >= 0 {
 		stock = fmt.Sprintf("%s（剩余 %d 件）", firstText(stock, "未知"), report.RemainNum)
 	}
-	lines := []string{fmt.Sprintf("%s - ¥%s", firstText(report.Name, report.ItemID), landed)}
+	productName := firstText(report.Name, report.ItemID)
+	lines := []string{fmt.Sprintf("%s - ¥%s", productName, landed)}
+	if n.config.Format == FormatMarkdown {
+		lines[0] = "### " + productName
+	}
 	if customHeader != "" {
 		lines[0] = customHeader
 	}
@@ -202,12 +202,24 @@ func (n *Notifier) buildReport(report Report) string {
 			if change.Description != "" {
 				description = "（" + change.Description + "）"
 			}
-			lines = append(lines, fmt.Sprintf("- %s：%s -> %s%s", change.Field, displayChangeValue(change, true), displayChangeValue(change, false), description))
+			newValue := displayChangeValue(change, false)
+			if n.config.Format == FormatMarkdown {
+				newValue = "**" + newValue + "**"
+			}
+			lines = append(lines, fmt.Sprintf("- %s：%s -> %s%s", change.Field, displayChangeValue(change, true), newValue, description))
 		}
 	}
-	lines = append(lines, fmt.Sprintf("页面价：¥%s   到手价：¥%s   库存：%s", formatYuan(report.PagePriceCents), landed, firstText(stock, "未知")))
+	if n.config.Format == FormatMarkdown {
+		lines = append(lines, fmt.Sprintf("**页面价：** ¥%s   **到手价：** <font color=\"#FF0000\">**¥%s**</font>   **库存：** %s", formatYuan(report.PagePriceCents), landed, firstText(stock, "未知")))
+	} else {
+		lines = append(lines, fmt.Sprintf("页面价：¥%s   到手价：¥%s   库存：%s", formatYuan(report.PagePriceCents), landed, firstText(stock, "未知")))
+	}
 	if discounted := n.discountedPrice(report); discounted != "" {
-		lines = append(lines, discounted)
+		if n.config.Format == FormatMarkdown {
+			lines = append(lines, "**"+discounted+"**")
+		} else {
+			lines = append(lines, discounted)
+		}
 	}
 	if report.HasQuote {
 		diffSign := ""
@@ -215,22 +227,55 @@ func (n *Notifier) buildReport(report Report) string {
 			diffSign = "+"
 		}
 		quoteLine := fmt.Sprintf("报价对比：%s %s 总价 ¥%.2f   折后成本 ¥%.2f   差价：%s%.2f", firstText(report.QuoteName, "服务端报价"), report.QuoteSpec, report.QuoteTotal, report.QuoteCost, diffSign, report.QuoteDiff)
+		if n.config.Format == FormatMarkdown {
+			diffText := fmt.Sprintf("**%s%.2f**", diffSign, report.QuoteDiff)
+			if report.QuoteDiff > 0 {
+				diffText = "<font color=\"#FF0000\">" + diffText + "</font>"
+			}
+			quoteLine = fmt.Sprintf("**报价对比：** %s %s 总价 ¥%.2f   **折后成本：** ¥%.2f   **差价：** %s", firstText(report.QuoteName, "服务端报价"), report.QuoteSpec, report.QuoteTotal, report.QuoteCost, diffText)
+		}
 		if report.QuotePricePerUnit > 0 {
 			quoteLine += fmt.Sprintf("   单价 ¥%.2f", report.QuotePricePerUnit)
 		}
 		if report.QuoteDiff > 0 {
-			quoteLine += fmt.Sprintf("（%.1f%%）", report.ProfitRatio*100)
+			ratio := fmt.Sprintf("（%.1f%%）", report.ProfitRatio*100)
+			if n.config.Format == FormatMarkdown {
+				ratio = " <font color=\"#FF0000\">**" + ratio + "**</font>"
+			}
+			quoteLine += ratio
 		}
 		lines = append(lines, quoteLine)
 	}
+	hasLinks := (n.config.ShowProductURL && report.ProductURL != "") ||
+		(n.config.ShowCheckoutURL && report.CheckoutURL != "") ||
+		(n.config.ShowAppQRCode && report.ItemID != "")
+	if hasLinks {
+		lines = append(lines, "---")
+	}
 	if n.config.ShowProductURL && report.ProductURL != "" {
-		lines = append(lines, "商品链接："+report.ProductURL)
+		if n.config.Format == FormatMarkdown {
+			lines = append(lines, fmt.Sprintf("商品链接：[%s](%s)", report.ProductURL, report.ProductURL))
+		} else {
+			lines = append(lines, "商品链接："+report.ProductURL)
+		}
 	}
 	if n.config.ShowCheckoutURL && report.CheckoutURL != "" {
-		lines = append(lines, "支付链接："+report.CheckoutURL)
+		if n.config.Format == FormatMarkdown {
+			lines = append(lines, fmt.Sprintf("支付链接：[%s](%s)", report.CheckoutURL, report.CheckoutURL))
+		} else {
+			lines = append(lines, "支付链接："+report.CheckoutURL)
+		}
 	}
 	if n.config.ShowAppQRCode && report.ItemID != "" {
-		lines = append(lines, "APP&扫码：https://www.axureshow.com/project/uaSlvkaG/?skuId="+report.ItemID)
+		appURL := "https://www.axureshow.com/project/uaSlvkaG/?skuId=" + report.ItemID
+		if n.config.Format == FormatMarkdown {
+			lines = append(lines, fmt.Sprintf("APP&扫码：[%s](%s)", appURL, appURL))
+		} else {
+			lines = append(lines, "APP&扫码："+appURL)
+		}
+	}
+	if n.config.Format == FormatMarkdown {
+		return strings.Join(lines, "\n\n")
 	}
 	return strings.Join(lines, "\n")
 }
@@ -242,6 +287,9 @@ func (n *Notifier) discountedPrice(report Report) string {
 	}
 	divisor := packageDivisor(report.Name)
 	price := float64(report.FinalPriceCents) * rate / float64(divisor) / 100
+	if n.config.Format == FormatMarkdown {
+		return fmt.Sprintf("预估折后价：<font color=\"#FF0000\">¥%.2f</font>（%.3g 折%s）", price, rate, divisorText(divisor))
+	}
 	return fmt.Sprintf("预估折后价：¥%.2f（%.3g 折%s）", price, rate, divisorText(divisor))
 }
 
