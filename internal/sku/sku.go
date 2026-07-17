@@ -114,6 +114,13 @@ type cartVendor struct {
 type cartInfo struct {
 	VendorList []cartVendor       `json:"vendorList"`
 	FlatSkus   map[string]flatSku `json:"flatSkus"`
+	SwitchTab  flexibleString     `json:"switchTab"`
+	NewTabMenu json.RawMessage    `json:"newTabMenu"`
+}
+
+type CartviewResult struct {
+	SKUs          []SKU
+	Authoritative bool
 }
 
 type cartviewPayload struct {
@@ -153,16 +160,25 @@ type pluginEntry struct {
 //
 // The "data" wrapper ({"data": {"cartInfo": ...}}) is accepted but not required.
 func ParseCartview(data []byte) ([]SKU, error) {
+	result, err := ParseCartviewSnapshot(data)
+	return result.SKUs, err
+}
+
+// ParseCartviewSnapshot also reports whether the response represents the
+// authoritative "全部" cart. JD returns filtered service-tab responses with an
+// emptyCart flag but without flatSkus or switchTab; those must not replace the
+// monitoring baseline.
+func ParseCartviewSnapshot(data []byte) (CartviewResult, error) {
 	if len(strings.TrimSpace(string(data))) == 0 {
-		return nil, errors.New("empty cartview body")
+		return CartviewResult{}, errors.New("empty cartview body")
 	}
 
 	var payload cartviewPayload
 	if err := json.Unmarshal(data, &payload); err != nil {
-		return nil, err
+		return CartviewResult{}, err
 	}
 	if payload.ResultData != nil && len(payload.ResultData.CartInfo.Vendors) > 0 {
-		return fromPluginVendors(payload.ResultData.CartInfo.Vendors), nil
+		return CartviewResult{SKUs: fromPluginVendors(payload.ResultData.CartInfo.Vendors), Authoritative: true}, nil
 	}
 
 	info := payload.CartInfo
@@ -172,11 +188,16 @@ func ParseCartview(data []byte) ([]SKU, error) {
 
 	// 1) Prefer flatSkus (full set, never paginated).
 	if len(info.FlatSkus) > 0 {
-		return fromFlatSkus(info)
+		skus, err := fromFlatSkus(info)
+		return CartviewResult{SKUs: skus, Authoritative: true}, err
 	}
 
 	// 2) Fall back to vendorList.
-	return fromVendorList(info)
+	skus, err := fromVendorList(info)
+	// Modern filtered tabs include newTabMenu but omit switchTab. The all-cart
+	// response sets switchTab="0", including when the real cart is empty.
+	authoritative := len(info.NewTabMenu) == 0 || string(info.SwitchTab) == "0"
+	return CartviewResult{SKUs: skus, Authoritative: authoritative}, err
 }
 
 func fromPluginVendors(vendors []pluginVendor) []SKU {

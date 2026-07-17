@@ -166,6 +166,88 @@ func TestParseCartviewVendorListFallback(t *testing.T) {
 	}
 }
 
+func TestParseCartviewSnapshotIgnoresFilteredEmptyTab(t *testing.T) {
+	filtered := `{
+  "cartInfo": {
+    "emptyCart": true,
+    "newTabMenu": {"firstMenuList": [{"menuText": "服务", "menuValue": "10004", "skuNums": 60}]},
+    "vendorList": []
+  }
+}`
+	result, err := ParseCartviewSnapshot([]byte(filtered))
+	if err != nil {
+		t.Fatalf("ParseCartviewSnapshot() error = %v", err)
+	}
+	if result.Authoritative || len(result.SKUs) != 0 {
+		t.Fatalf("filtered snapshot = %+v, want non-authoritative empty result", result)
+	}
+}
+
+func TestParseCartviewSnapshotAcceptsRealEmptyAllTab(t *testing.T) {
+	emptyAll := `{
+  "cartInfo": {
+    "emptyCart": true,
+    "switchTab": "0",
+    "newTabMenu": {"firstMenuList": [{"menuText": "全部", "menuValue": "10001", "skuNums": 0}]},
+    "vendorList": []
+  }
+}`
+	result, err := ParseCartviewSnapshot([]byte(emptyAll))
+	if err != nil {
+		t.Fatalf("ParseCartviewSnapshot() error = %v", err)
+	}
+	if !result.Authoritative || len(result.SKUs) != 0 {
+		t.Fatalf("empty all snapshot = %+v, want authoritative empty result", result)
+	}
+}
+
+func TestMonitoringBaselineSurvivesFilteredCartview(t *testing.T) {
+	fullPayload := func(landedPrice string) string {
+		return `{
+  "cartInfo": {
+    "switchTab": "0",
+    "newTabMenu": {"firstMenuList": [{"menuText": "全部", "menuValue": "10001"}]},
+    "flatSkus": {"uuid": {"itemId": "sku-1", "itemName": "商品", "price": "100.00"}},
+    "vendorList": [{"items": [{"itemId": "sku-1", "price": "10000", "landedPrice": "` + landedPrice + `"}]}]
+  }
+}`
+	}
+	filteredPayload := `{
+  "cartInfo": {
+    "emptyCart": true,
+    "newTabMenu": {"firstMenuList": [{"menuText": "服务", "menuValue": "10004"}]},
+    "vendorList": []
+  }
+}`
+
+	store := NewStore()
+	baseline, err := ParseCartviewSnapshot([]byte(fullPayload("9000")))
+	if err != nil || !baseline.Authoritative {
+		t.Fatalf("baseline parse = %+v, %v", baseline, err)
+	}
+	if result := store.Update(baseline.SKUs); result.Changed != 0 {
+		t.Fatalf("initial baseline reported changes: %+v", result)
+	}
+	filtered, err := ParseCartviewSnapshot([]byte(filteredPayload))
+	if err != nil || filtered.Authoritative {
+		t.Fatalf("filtered parse = %+v, %v", filtered, err)
+	}
+	if filtered.Authoritative {
+		store.Update(filtered.SKUs)
+	}
+	changed, err := ParseCartviewSnapshot([]byte(fullPayload("8500")))
+	if err != nil || !changed.Authoritative {
+		t.Fatalf("changed parse = %+v, %v", changed, err)
+	}
+	result := store.Update(changed.SKUs)
+	if result.Changed != 1 || len(result.ChangedEntries) != 1 || !result.ChangedEntries[0].PriceChanged {
+		t.Fatalf("price change was not detected after filtered response: %+v", result)
+	}
+	if result.ChangedEntries[0].PrevFinalCents != 9000 || result.ChangedEntries[0].FinalPriceCents != 8500 {
+		t.Fatalf("price baseline was not preserved: %+v", result.ChangedEntries[0])
+	}
+}
+
 func TestParseCartviewInvalid(t *testing.T) {
 	if _, err := ParseCartview([]byte("not json")); err == nil {
 		t.Fatal("expected error for invalid JSON")

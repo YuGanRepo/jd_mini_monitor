@@ -764,7 +764,7 @@ func (server *Server) extractFromResponse(rule *rules.Rule, response *http.Respo
 	switch rule.Extract {
 	case "jd-cartview":
 		payloadPath := server.writeCaptureFile("cartview-response", "json", payload)
-		skus, parseErr := sku.ParseCartview(payload)
+		cartview, parseErr := sku.ParseCartviewSnapshot(payload)
 		if parseErr != nil {
 			server.appendCaptureJSONL("sku-events.jsonl", map[string]any{
 				"time":         time.Now(),
@@ -777,6 +777,20 @@ func (server *Server) extractFromResponse(rule *rules.Rule, response *http.Respo
 			server.logger.Printf("extract: parse cartview failed for rule %q (len=%d, file=%s): %v", rule.Name, len(payload), payloadPath, parseErr)
 			return
 		}
+		if !cartview.Authoritative {
+			server.appendCaptureJSONL("sku-events.jsonl", map[string]any{
+				"time":         time.Now(),
+				"rule":         rule.Name,
+				"payloadPath":  payloadPath,
+				"payloadBytes": len(payload),
+				"parsed":       len(cartview.SKUs),
+				"ignored":      true,
+				"reason":       "filtered cart snapshot",
+			})
+			server.logger.Printf("extract: rule=%q ignored filtered cart snapshot parsed=%d file=%s", rule.Name, len(cartview.SKUs), payloadPath)
+			return
+		}
+		skus := cartview.SKUs
 		server.skuPersistMu.Lock()
 		result := server.skuStore.Update(skus)
 		server.writeLatestSKUFile()
